@@ -27,6 +27,7 @@ if (Platform.OS === 'android') {
 }
 
 // --- Constants ---
+const LEVEL_THRESHOLD = 500; // XP needed to level up
 const COLORS = {
   background: '#121212',
   card: '#1E1E1E',
@@ -365,18 +366,76 @@ export default function App() {
   const deleteReward = (id) => setRewards(rewards.filter(r => r.id !== id));
 
   // --- Renderers ---
-  const renderHeader = () => (
-    <View style={styles.header}>
-      <View>
-        <Text style={styles.headerTitle}>GamifyLife</Text>
-        <Text style={styles.headerSubtitle}>XP: {points}</Text>
+const renderHeader = () => {
+    // 1. Level Logic
+    const currentLevel = Math.floor(points / LEVEL_THRESHOLD) + 1;
+    const xpTowardsNext = points % LEVEL_THRESHOLD;
+    const levelProgress = (xpTowardsNext / LEVEL_THRESHOLD) * 100;
+
+    // 2. Daily Task Progress Logic
+    const today = getCurrentDateStr(); // Ensure this helper exists in your scope (it's in the previous code)
+    const dailyTasks = tasks.filter(t => {
+      // Only count tasks that are meant for today (repeating or one-off)
+      const todayIndex = new Date().getDay();
+      return t.repeatDays.length === 0 || t.repeatDays.includes(todayIndex);
+    });
+    const totalDaily = dailyTasks.length;
+    const completedDaily = dailyTasks.filter(t => t.completed).length;
+    const dailyPercent = totalDaily === 0 ? 0 : (completedDaily / totalDaily) * 100;
+
+    return (
+      <View style={styles.heroContainer}>
+        {/* Top Row: Title & Animation Anchor */}
+        <View style={styles.heroTop}>
+          <View>
+            <Text style={styles.heroTitle}>GAMIFY<Text style={{color: COLORS.primary}}>LIFE</Text></Text>
+            <Text style={styles.heroDate}>{new Date().toDateString()}</Text>
+          </View>
+          
+          {/* Points Popup Anchor */}
+          <View style={styles.pointsAnchor}>
+            {popups.map(p => <PointPopup key={p.id} {...p} onFinish={removePopup} />)}
+            <View style={styles.streakBadgeHeader}>
+              <MaterialCommunityIcons name="fire" size={20} color={COLORS.orange} />
+              {/* Calculate total streak across all tasks for a 'global' streak vibe if desired, or just show an icon */}
+            </View>
+          </View>
+        </View>
+
+        {/* Middle Row: Level & XP Bar */}
+        <View style={styles.levelCard}>
+          <View style={styles.levelBadge}>
+            <Text style={styles.levelLabel}>LVL</Text>
+            <Text style={styles.levelValue}>{currentLevel}</Text>
+          </View>
+
+          <View style={styles.xpSection}>
+            <View style={styles.xpTextRow}>
+              <Text style={styles.xpLabel}>Experience</Text>
+              <Text style={styles.xpValue}>{xpTowardsNext} <Text style={{color: '#666'}}>/</Text> {LEVEL_THRESHOLD} XP</Text>
+            </View>
+            
+            {/* XP Bar */}
+            <View style={styles.progressBarBg}>
+              <View style={[styles.progressBarFill, { width: `${levelProgress}%`, backgroundColor: COLORS.gold }]} />
+            </View>
+          </View>
+        </View>
+
+        {/* Bottom Row: Daily Quest Progress */}
+        <View style={styles.dailyTracker}>
+          <View style={styles.trackerRow}>
+            <Text style={styles.trackerLabel}>Daily Quests</Text>
+            <Text style={styles.trackerValue}>{completedDaily}/{totalDaily}</Text>
+          </View>
+          {/* Daily Bar */}
+          <View style={[styles.progressBarBg, { height: 6, marginTop: 5, backgroundColor: '#333' }]}>
+            <View style={[styles.progressBarFill, { width: `${dailyPercent}%`, backgroundColor: COLORS.secondary }]} />
+          </View>
+        </View>
       </View>
-      <View style={styles.pointsContainer}>
-        {popups.map(p => <PointPopup key={p.id} {...p} onFinish={removePopup} />)}
-        <MaterialCommunityIcons name="star-face" size={32} color={COLORS.gold} />
-      </View>
-    </View>
-  );
+    );
+  };
 
   const renderTabs = () => (
     <View style={styles.tabContainer}>
@@ -547,6 +606,178 @@ const styles = StyleSheet.create({
   popupContainer: { position: 'absolute', top: 0, right: 40, width: 150, alignItems: 'flex-end', zIndex: 99 },
   popupText: { fontSize: 18, fontWeight: 'bold', textAlign: 'right' },
   tabContainer: { flexDirection: 'row', marginHorizontal: 20, marginVertical: 10, backgroundColor: '#333', borderRadius: 10, padding: 4 },
+  tab: { flex: 1, padding: 10, alignItems: 'center', borderRadius: 8 },
+  activeTab: { backgroundColor: COLORS.primary },
+  tabText: { color: COLORS.textDim, fontWeight: '600', fontSize: 12 },
+  activeTabText: { color: 'white' },
+  content: { flex: 1, paddingHorizontal: 20 },
+  inputRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 15 },
+  input: { flex: 1, backgroundColor: COLORS.card, color: 'white', padding: 15, borderRadius: 10 },
+  addButton: { backgroundColor: COLORS.secondary, width: 50, height: 50, borderRadius: 10, justifyContent: 'center', alignItems: 'center', marginLeft: 10 },
+  optionsToggle: { padding: 10 },
+  optionsContainer: { backgroundColor: '#252525', padding: 15, borderRadius: 10, marginBottom: 20 },
+  sectionLabel: { color: COLORS.textDim, marginBottom: 10, fontSize: 12, fontWeight: 'bold' },
+  extraRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 15 },
+  inputSmall: { flex: 1, backgroundColor: '#1a1a1a', color: 'white', padding: 10, borderRadius: 8, marginHorizontal: 2, textAlign: 'center' },
+  daySelector: { flexDirection: 'row', justifyContent: 'space-between' },
+  dayCircle: { width: 35, height: 35, borderRadius: 18, backgroundColor: '#333', justifyContent: 'center', alignItems: 'center' },
+  dayCircleActive: { backgroundColor: COLORS.primary },
+  dayText: { color: COLORS.textDim, fontSize: 12 },
+  dayTextActive: { color: 'white', fontWeight: 'bold' },
+  card: { backgroundColor: COLORS.card, borderRadius: 12, padding: 15, marginBottom: 10, flexDirection: 'row', alignItems: 'center' },
+  cardFailed: { borderColor: COLORS.danger, borderWidth: 1 },
+  checkboxContainer: { marginRight: 15 },
+  cardText: { color: 'white', fontSize: 16, fontWeight: '500' },
+  strikethrough: { textDecorationLine: 'line-through', color: COLORS.textDim },
+  titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  streakBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#332200', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, marginLeft: 8 },
+  streakText: { color: COLORS.gold, fontSize: 12, fontWeight: 'bold', marginLeft: 2 },
+  metaRow: { flexDirection: 'row', marginTop: 4 },
+  metaText: { fontSize: 12, color: COLORS.textDim },
+  buyButton: { backgroundColor: COLORS.primary, paddingHorizontal: 15, paddingVertical: 8, borderRadius: 20 },
+  typeSelector: { flexDirection: 'row', marginBottom: 15, justifyContent: 'center' },
+  typeBtn: { paddingVertical: 6, paddingHorizontal: 20, backgroundColor: '#333', marginHorizontal: 5, borderRadius: 20 },
+  typeBtnActive: { backgroundColor: COLORS.blue },
+    typeText: { color: 'white', fontWeight: 'bold', fontSize: 12 },
+  container: { flex: 1, backgroundColor: COLORS.background, paddingTop: Platform.OS === 'android' ? 30 : 0 },
+  
+  // --- HERO / HEADER STYLES ---
+  heroContainer: {
+    backgroundColor: COLORS.card,
+    padding: 20,
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4.65,
+    elevation: 8,
+    marginBottom: 15,
+    zIndex: 10
+  },
+  heroTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 15,
+  },
+  heroTitle: {
+    fontSize: 22,
+    fontWeight: '900', // Extra bold
+    color: 'white',
+    letterSpacing: 1,
+  },
+  heroDate: {
+    color: COLORS.textDim,
+    fontSize: 12,
+    marginTop: 2,
+    textTransform: 'uppercase',
+    fontWeight: '600'
+  },
+  pointsAnchor: {
+    position: 'relative',
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+    width: 60,
+  },
+  streakBadgeHeader: {
+    backgroundColor: '#332200', 
+    padding: 8, 
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 152, 0, 0.3)'
+  },
+
+  // --- Level Card ---
+  levelCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 15,
+  },
+  levelBadge: {
+    width: 60,
+    height: 60,
+    borderRadius: 20,
+    backgroundColor: '#2A2A2A',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: COLORS.primary,
+    marginRight: 15,
+    shadowColor: COLORS.primary,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.4,
+    shadowRadius: 10,
+  },
+  levelLabel: {
+    fontSize: 10,
+    color: COLORS.textDim,
+    fontWeight: 'bold',
+  },
+  levelValue: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: 'white',
+  },
+  xpSection: {
+    flex: 1,
+  },
+  xpTextRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  xpLabel: {
+    color: COLORS.textDim,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  xpValue: {
+    color: COLORS.gold,
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  
+  // --- Progress Bars ---
+  progressBarBg: {
+    height: 10,
+    backgroundColor: '#111',
+    borderRadius: 5,
+    overflow: 'hidden',
+  },
+  progressBarFill: {
+    height: '100%',
+    borderRadius: 5,
+  },
+
+  // --- Daily Tracker ---
+  dailyTracker: {
+    backgroundColor: '#252525',
+    borderRadius: 12,
+    padding: 12,
+  },
+  trackerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 2,
+  },
+  trackerLabel: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  trackerValue: {
+    color: COLORS.secondary,
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  
+  // --- Animation Popups (Updated positions) ---
+  popupContainer: { position: 'absolute', top: 10, right: 10, width: 150, alignItems: 'flex-end', zIndex: 99 },
+  popupText: { fontSize: 20, fontWeight: '900', textAlign: 'right', textShadowColor: 'black', textShadowRadius: 5 },
+
+  // ... (Keep your existing styles for Tabs, Cards, Inputs, etc. below here) ...
+  tabContainer: { flexDirection: 'row', marginHorizontal: 20, marginBottom: 15, backgroundColor: '#333', borderRadius: 10, padding: 4 },
   tab: { flex: 1, padding: 10, alignItems: 'center', borderRadius: 8 },
   activeTab: { backgroundColor: COLORS.primary },
   tabText: { color: COLORS.textDim, fontWeight: '600', fontSize: 12 },
