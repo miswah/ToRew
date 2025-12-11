@@ -1,8 +1,10 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
     Alert,
+    Animated,
+    Easing,
     FlatList,
     KeyboardAvoidingView,
     Platform,
@@ -25,38 +27,85 @@ const COLORS = {
   text: '#FFFFFF',
   textDim: '#AAAAAA',
   danger: '#CF6679',
+  success: '#4caf50'
 };
 
-const STORAGE_KEY = '@gamify_todo_data';
+const STORAGE_KEY = '@gamify_todo_data_v2';
+
+// --- Floating Animation Component ---
+const PointPopup = ({ id, value, onFinish }) => {
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const posAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 300,
+        useNativeDriver: true,
+      }),
+      Animated.timing(posAnim, {
+        toValue: -40, // Move up
+        duration: 800,
+        easing: Easing.out(Easing.exp),
+        useNativeDriver: true,
+      }),
+    ]).start(() => {
+      // Fade out
+      Animated.timing(fadeAnim, {
+        toValue: 0,
+        duration: 300,
+        delay: 200,
+        useNativeDriver: true,
+      }).start(() => onFinish(id));
+    });
+  }, []);
+
+  const isPositive = value > 0;
+  const displayValue = isPositive ? `+${value}` : `${value}`;
+
+  return (
+    <Animated.View style={[
+      styles.popupContainer, 
+      { 
+        opacity: fadeAnim, 
+        transform: [{ translateY: posAnim }] 
+      }
+    ]}>
+      <Text style={[
+        styles.popupText, 
+        { color: isPositive ? COLORS.gold : COLORS.danger }
+      ]}>
+        {displayValue}
+      </Text>
+    </Animated.View>
+  );
+};
 
 export default function App() {
   const [points, setPoints] = useState(0);
   const [tasks, setTasks] = useState([]);
   const [rewards, setRewards] = useState([]);
-  const [activeTab, setActiveTab] = useState('tasks'); // 'tasks' or 'rewards'
+  const [activeTab, setActiveTab] = useState('tasks');
+  const [popups, setPopups] = useState([]); // Store active animations
   
   // Input states
   const [taskInput, setTaskInput] = useState('');
+  const [taskDue, setTaskDue] = useState('');
+  const [taskPenalty, setTaskPenalty] = useState('');
+  const [showTaskOptions, setShowTaskOptions] = useState(false);
+
   const [rewardName, setRewardName] = useState('');
   const [rewardCost, setRewardCost] = useState('');
 
-  // --- Load Data on Startup ---
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  // --- Save Data Whenever State Changes ---
-  useEffect(() => {
-    saveData();
-  }, [points, tasks, rewards]);
+  useEffect(() => { loadData(); }, []);
+  useEffect(() => { saveData(); }, [points, tasks, rewards]);
 
   const saveData = async () => {
     try {
       const data = { points, tasks, rewards };
       await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-    } catch (e) {
-      console.error('Failed to save data', e);
-    }
+    } catch (e) { console.error(e); }
   };
 
   const loadData = async () => {
@@ -68,30 +117,53 @@ export default function App() {
         setTasks(data.tasks || []);
         setRewards(data.rewards || []);
       }
-    } catch (e) {
-      console.error('Failed to load data', e);
-    }
+    } catch (e) { console.error(e); }
+  };
+
+  // --- Animation Logic ---
+  const triggerPointAnimation = (value) => {
+    const id = Date.now().toString() + Math.random();
+    setPopups(prev => [...prev, { id, value }]);
+  };
+
+  const removePopup = (id) => {
+    setPopups(prev => prev.filter(p => p.id !== id));
+  };
+
+  const updatePoints = (amount) => {
+    setPoints(prev => Math.max(0, prev + amount));
+    triggerPointAnimation(amount);
   };
 
   // --- Logic: Tasks ---
   const addTask = () => {
     if (!taskInput.trim()) return;
+    
+    const penaltyValue = parseInt(taskPenalty);
+
     const newTask = { 
       id: Date.now().toString(), 
       text: taskInput, 
+      due: taskDue.trim(),
+      penalty: isNaN(penaltyValue) ? 0 : penaltyValue,
       completed: false 
     };
     setTasks([newTask, ...tasks]);
+    
+    // Reset inputs
     setTaskInput('');
+    setTaskDue('');
+    setTaskPenalty('');
+    setShowTaskOptions(false);
   };
 
   const toggleTask = (id) => {
     setTasks(tasks.map(task => {
       if (task.id === id) {
         const isNowCompleted = !task.completed;
-        // Reward 10 points for completing, remove 10 if unchecking
-        if (isNowCompleted) setPoints(prev => prev + 10);
-        else setPoints(prev => Math.max(0, prev - 10));
+        // Standard Reward: 10 points
+        if (isNowCompleted) updatePoints(10);
+        else updatePoints(-10); // Revert points if unchecked
         
         return { ...task, completed: isNowCompleted };
       }
@@ -99,25 +171,35 @@ export default function App() {
     }));
   };
 
-  const deleteTask = (id) => {
-    setTasks(tasks.filter(t => t.id !== id));
+  const deleteTask = (task) => {
+    // If task is incomplete and has a penalty, apply it
+    if (!task.completed && task.penalty > 0) {
+      Alert.alert(
+        "Task Failed!",
+        `Deleting this incomplete task will cost you ${task.penalty} points. Proceed?`,
+        [
+          { text: "Cancel", style: "cancel" },
+          { 
+            text: "Accept Fate", 
+            onPress: () => {
+              updatePoints(-task.penalty);
+              setTasks(tasks.filter(t => t.id !== task.id));
+            }
+          }
+        ]
+      );
+    } else {
+      setTasks(tasks.filter(t => t.id !== task.id));
+    }
   };
 
   // --- Logic: Rewards ---
   const addReward = () => {
     if (!rewardName.trim() || !rewardCost.trim()) return;
     const cost = parseInt(rewardCost);
-    if (isNaN(cost)) {
-      Alert.alert("Invalid Cost", "Please enter a valid number for the cost.");
-      return;
-    }
+    if (isNaN(cost)) return;
 
-    const newReward = {
-      id: Date.now().toString(),
-      text: rewardName,
-      cost: cost
-    };
-    setRewards([...rewards, newReward]);
+    setRewards([...rewards, { id: Date.now().toString(), text: rewardName, cost }]);
     setRewardName('');
     setRewardCost('');
   };
@@ -126,20 +208,20 @@ export default function App() {
     if (points >= reward.cost) {
       Alert.alert(
         "Redeem Reward",
-        `Are you sure you want to buy "${reward.text}" for ${reward.cost} points?`,
+        `Buy "${reward.text}" for ${reward.cost} points?`,
         [
           { text: "Cancel", style: "cancel" },
           { 
             text: "Buy", 
             onPress: () => {
-              setPoints(prev => prev - reward.cost);
-              Alert.alert("Success!", "You purchased a reward. Enjoy!");
+              updatePoints(-reward.cost);
+              Alert.alert("Enjoy!", "You earned it.");
             }
           }
         ]
       );
     } else {
-      Alert.alert("Insufficient Funds", "Complete more tasks to earn points!");
+      Alert.alert("Too Expensive", "Do more tasks to afford this!");
     }
   };
 
@@ -147,36 +229,68 @@ export default function App() {
     setRewards(rewards.filter(r => r.id !== id));
   };
 
-  // --- Render Components ---
-
+  // --- Render Helpers ---
   const renderHeader = () => (
     <View style={styles.header}>
       <View>
         <Text style={styles.headerTitle}>GamifyLife</Text>
-        <Text style={styles.headerSubtitle}>Productivity Store</Text>
+        <Text style={styles.headerSubtitle}>Level Up Your Day</Text>
       </View>
       <View style={styles.pointsContainer}>
+        {/* Render Active Animations */}
+        {popups.map(p => (
+          <PointPopup key={p.id} id={p.id} value={p.value} onFinish={removePopup} />
+        ))}
         <MaterialCommunityIcons name="star-face" size={24} color={COLORS.gold} />
         <Text style={styles.pointsText}>{points}</Text>
       </View>
     </View>
   );
 
-  const renderTabs = () => (
-    <View style={styles.tabContainer}>
-      <TouchableOpacity 
-        style={[styles.tab, activeTab === 'tasks' && styles.activeTab]} 
-        onPress={() => setActiveTab('tasks')}
-      >
-        <Text style={[styles.tabText, activeTab === 'tasks' && styles.activeTabText]}>Tasks</Text>
-      </TouchableOpacity>
-      <TouchableOpacity 
-        style={[styles.tab, activeTab === 'rewards' && styles.activeTab]} 
-        onPress={() => setActiveTab('rewards')}
-      >
-        <Text style={[styles.tabText, activeTab === 'rewards' && styles.activeTabText]}>Rewards</Text>
-      </TouchableOpacity>
-    </View>
+  const renderTaskInput = () => (
+    <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.inputSection}>
+      <View style={styles.mainInputRow}>
+        <TextInput
+          style={styles.input}
+          placeholder="New Quest..."
+          placeholderTextColor={COLORS.textDim}
+          value={taskInput}
+          onChangeText={setTaskInput}
+        />
+        <TouchableOpacity 
+          style={styles.optionsToggle} 
+          onPress={() => setShowTaskOptions(!showTaskOptions)}
+        >
+          <MaterialCommunityIcons 
+            name={showTaskOptions ? "chevron-up" : "chevron-down"} 
+            size={24} color={COLORS.textDim} 
+          />
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.addButton} onPress={addTask}>
+          <MaterialCommunityIcons name="plus" size={24} color="white" />
+        </TouchableOpacity>
+      </View>
+
+      {showTaskOptions && (
+        <View style={styles.extraOptionsRow}>
+          <TextInput
+            style={[styles.inputSmall, { flex: 2 }]}
+            placeholder="Due (e.g. 5pm)"
+            placeholderTextColor={COLORS.textDim}
+            value={taskDue}
+            onChangeText={setTaskDue}
+          />
+          <TextInput
+            style={[styles.inputSmall, { flex: 1, marginLeft: 10 }]}
+            placeholder="Fail Pen."
+            placeholderTextColor={COLORS.textDim}
+            keyboardType="numeric"
+            value={taskPenalty}
+            onChangeText={setTaskPenalty}
+          />
+        </View>
+      )}
+    </KeyboardAvoidingView>
   );
 
   const renderTaskItem = ({ item }) => (
@@ -188,11 +302,29 @@ export default function App() {
           color={item.completed ? COLORS.secondary : COLORS.textDim} 
         />
       </TouchableOpacity>
-      <Text style={[styles.cardText, item.completed && styles.strikethrough]}>
-        {item.text}
-      </Text>
+      
+      <View style={{flex: 1}}>
+        <Text style={[styles.cardText, item.completed && styles.strikethrough]}>
+          {item.text}
+        </Text>
+        {/* Meta Data Row */}
+        <View style={styles.metaRow}>
+          {item.due ? (
+             <Text style={styles.metaText}>
+               <MaterialCommunityIcons name="clock-outline" size={12} /> {item.due}
+             </Text>
+          ) : null}
+          {item.penalty > 0 && !item.completed ? (
+             <Text style={[styles.metaText, { color: COLORS.danger, marginLeft: 10 }]}>
+               <MaterialCommunityIcons name="alert-circle-outline" size={12} /> -{item.penalty} on fail
+             </Text>
+          ) : null}
+        </View>
+      </View>
+
       {item.completed && <Text style={styles.pointsBadge}>+10</Text>}
-      <TouchableOpacity onPress={() => deleteTask(item.id)}>
+      
+      <TouchableOpacity onPress={() => deleteTask(item)}>
         <MaterialCommunityIcons name="trash-can-outline" size={24} color={COLORS.danger} />
       </TouchableOpacity>
     </View>
@@ -222,35 +354,37 @@ export default function App() {
       <StatusBar barStyle="light-content" backgroundColor={COLORS.background} />
       
       {renderHeader()}
-      {renderTabs()}
+      
+      <View style={styles.tabContainer}>
+        <TouchableOpacity 
+          style={[styles.tab, activeTab === 'tasks' && styles.activeTab]} 
+          onPress={() => setActiveTab('tasks')}
+        >
+          <Text style={[styles.tabText, activeTab === 'tasks' && styles.activeTabText]}>Quests</Text>
+        </TouchableOpacity>
+        <TouchableOpacity 
+          style={[styles.tab, activeTab === 'rewards' && styles.activeTab]} 
+          onPress={() => setActiveTab('rewards')}
+        >
+          <Text style={[styles.tabText, activeTab === 'rewards' && styles.activeTabText]}>Rewards</Text>
+        </TouchableOpacity>
+      </View>
 
       <View style={styles.content}>
         {activeTab === 'tasks' ? (
           <>
-            <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.inputWrapper}>
-              <TextInput
-                style={styles.input}
-                placeholder="Add a new task..."
-                placeholderTextColor={COLORS.textDim}
-                value={taskInput}
-                onChangeText={setTaskInput}
-              />
-              <TouchableOpacity style={styles.addButton} onPress={addTask}>
-                <MaterialCommunityIcons name="plus" size={24} color="white" />
-              </TouchableOpacity>
-            </KeyboardAvoidingView>
-            
+            {renderTaskInput()}
             <FlatList
               data={tasks}
               renderItem={renderTaskItem}
               keyExtractor={item => item.id}
               contentContainerStyle={{ paddingBottom: 100 }}
-              ListEmptyComponent={<Text style={styles.emptyText}>No tasks yet. Get to work!</Text>}
+              ListEmptyComponent={<Text style={styles.emptyText}>No active quests.</Text>}
             />
           </>
         ) : (
           <>
-             <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.inputRow}>
+             <View style={styles.inputRow}>
               <TextInput
                 style={[styles.input, { flex: 2 }]}
                 placeholder="Reward Name"
@@ -269,14 +403,14 @@ export default function App() {
               <TouchableOpacity style={[styles.addButton, {marginLeft: 10}]} onPress={addReward}>
                 <MaterialCommunityIcons name="plus" size={24} color="white" />
               </TouchableOpacity>
-            </KeyboardAvoidingView>
+            </View>
 
             <FlatList
               data={rewards}
               renderItem={renderRewardItem}
               keyExtractor={item => item.id}
               contentContainerStyle={{ paddingBottom: 100 }}
-              ListEmptyComponent={<Text style={styles.emptyText}>Add rewards you want to buy!</Text>}
+              ListEmptyComponent={<Text style={styles.emptyText}>Stock up the shop!</Text>}
             />
           </>
         )}
@@ -299,6 +433,7 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.card,
     borderBottomWidth: 1,
     borderBottomColor: '#333',
+    zIndex: 10,
   },
   headerTitle: {
     fontSize: 24,
@@ -313,18 +448,36 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#333',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 20,
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+    borderRadius: 25,
     borderWidth: 1,
     borderColor: COLORS.gold,
+    position: 'relative', // For popup absolute positioning
   },
   pointsText: {
     color: COLORS.gold,
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: 'bold',
     marginLeft: 5,
   },
+  // Animation Styles
+  popupContainer: {
+    position: 'absolute',
+    top: 20, 
+    left: 0, 
+    right: 0,
+    alignItems: 'center',
+    zIndex: 20,
+  },
+  popupText: {
+    fontSize: 24,
+    fontWeight: '900',
+    textShadowColor: 'rgba(0, 0, 0, 0.75)',
+    textShadowOffset: {width: -1, height: 1},
+    textShadowRadius: 10
+  },
+  // Tab Styles
   tabContainer: {
     flexDirection: 'row',
     marginVertical: 15,
@@ -353,13 +506,17 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: 20,
   },
-  inputWrapper: {
-    flexDirection: 'row',
+  // Input Styles
+  inputSection: {
     marginBottom: 20,
   },
-  inputRow: {
+  mainInputRow: {
     flexDirection: 'row',
-    marginBottom: 20,
+    alignItems: 'center',
+  },
+  extraOptionsRow: {
+    flexDirection: 'row',
+    marginTop: 10,
   },
   input: {
     flex: 1,
@@ -369,14 +526,30 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     fontSize: 16,
   },
+  inputSmall: {
+    backgroundColor: COLORS.card,
+    color: COLORS.text,
+    padding: 10,
+    borderRadius: 8,
+    fontSize: 14,
+  },
+  optionsToggle: {
+    padding: 10,
+  },
   addButton: {
     backgroundColor: COLORS.secondary,
     justifyContent: 'center',
     alignItems: 'center',
     width: 50,
+    height: 50,
     borderRadius: 10,
-    marginLeft: 10,
+    marginLeft: 5,
   },
+  inputRow: {
+    flexDirection: 'row',
+    marginBottom: 20,
+  },
+  // List Item Styles
   card: {
     backgroundColor: COLORS.card,
     borderRadius: 12,
@@ -397,6 +570,15 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 16,
     color: COLORS.text,
+    marginBottom: 4,
+  },
+  metaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  metaText: {
+    color: COLORS.textDim,
+    fontSize: 12,
   },
   strikethrough: {
     textDecorationLine: 'line-through',
@@ -410,7 +592,6 @@ const styles = StyleSheet.create({
   costText: {
     color: COLORS.gold,
     fontSize: 12,
-    marginTop: 4,
   },
   buyButton: {
     backgroundColor: COLORS.primary,
