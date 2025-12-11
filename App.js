@@ -7,6 +7,7 @@ import {
     Easing,
     FlatList,
     KeyboardAvoidingView,
+    LayoutAnimation,
     Platform,
     SafeAreaView,
     StatusBar,
@@ -14,8 +15,16 @@ import {
     Text,
     TextInput,
     TouchableOpacity,
+    UIManager,
     View
 } from 'react-native';
+
+// Enable LayoutAnimation for Android
+if (Platform.OS === 'android') {
+  if (UIManager.setLayoutAnimationEnabledExperimental) {
+    UIManager.setLayoutAnimationEnabledExperimental(true);
+  }
+}
 
 // --- Constants & Theme ---
 const COLORS = {
@@ -27,10 +36,10 @@ const COLORS = {
   text: '#FFFFFF',
   textDim: '#AAAAAA',
   danger: '#CF6679',
-  success: '#4caf50'
+  failed: '#B00020',
 };
 
-const STORAGE_KEY = '@gamify_todo_data_v2';
+const STORAGE_KEY = '@gamify_todo_data_v3';
 
 // --- Floating Animation Component ---
 const PointPopup = ({ id, value, onFinish }) => {
@@ -39,25 +48,11 @@ const PointPopup = ({ id, value, onFinish }) => {
 
   useEffect(() => {
     Animated.parallel([
-      Animated.timing(fadeAnim, {
-        toValue: 1,
-        duration: 300,
-        useNativeDriver: true,
-      }),
-      Animated.timing(posAnim, {
-        toValue: -40, // Move up
-        duration: 800,
-        easing: Easing.out(Easing.exp),
-        useNativeDriver: true,
-      }),
+      Animated.timing(fadeAnim, { toValue: 1, duration: 300, useNativeDriver: true }),
+      Animated.timing(posAnim, { toValue: -50, duration: 800, easing: Easing.out(Easing.exp), useNativeDriver: true }),
     ]).start(() => {
-      // Fade out
-      Animated.timing(fadeAnim, {
-        toValue: 0,
-        duration: 300,
-        delay: 200,
-        useNativeDriver: true,
-      }).start(() => onFinish(id));
+      Animated.timing(fadeAnim, { toValue: 0, duration: 300, delay: 200, useNativeDriver: true })
+        .start(() => onFinish(id));
     });
   }, []);
 
@@ -65,19 +60,36 @@ const PointPopup = ({ id, value, onFinish }) => {
   const displayValue = isPositive ? `+${value}` : `${value}`;
 
   return (
-    <Animated.View style={[
-      styles.popupContainer, 
-      { 
-        opacity: fadeAnim, 
-        transform: [{ translateY: posAnim }] 
-      }
-    ]}>
-      <Text style={[
-        styles.popupText, 
-        { color: isPositive ? COLORS.gold : COLORS.danger }
-      ]}>
-        {displayValue}
-      </Text>
+    <Animated.View style={[styles.popupContainer, { opacity: fadeAnim, transform: [{ translateY: posAnim }] }]}>
+      <Text style={[styles.popupText, { color: isPositive ? COLORS.gold : COLORS.danger }]}>{displayValue}</Text>
+    </Animated.View>
+  );
+};
+
+// --- Animated List Item Component ---
+const AnimatedItem = ({ children, index }) => {
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const slideAnim = useRef(new Animated.Value(50)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 300,
+        delay: index * 50, // Stagger effect
+        useNativeDriver: true,
+      }),
+      Animated.spring(slideAnim, {
+        toValue: 0,
+        friction: 6,
+        useNativeDriver: true,
+      })
+    ]).start();
+  }, []);
+
+  return (
+    <Animated.View style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }] }}>
+      {children}
     </Animated.View>
   );
 };
@@ -87,19 +99,51 @@ export default function App() {
   const [tasks, setTasks] = useState([]);
   const [rewards, setRewards] = useState([]);
   const [activeTab, setActiveTab] = useState('tasks');
-  const [popups, setPopups] = useState([]); // Store active animations
+  const [popups, setPopups] = useState([]);
   
   // Input states
   const [taskInput, setTaskInput] = useState('');
-  const [taskDue, setTaskDue] = useState('');
+  const [taskDuration, setTaskDuration] = useState(''); // In minutes
   const [taskPenalty, setTaskPenalty] = useState('');
+  const [taskReward, setTaskReward] = useState(''); // Custom reward
   const [showTaskOptions, setShowTaskOptions] = useState(false);
 
   const [rewardName, setRewardName] = useState('');
   const [rewardCost, setRewardCost] = useState('');
 
+  // --- Lifecycle ---
   useEffect(() => { loadData(); }, []);
   useEffect(() => { saveData(); }, [points, tasks, rewards]);
+
+  // --- GAME LOOP: Check for expired tasks every 10 seconds ---
+  useEffect(() => {
+    const interval = setInterval(() => {
+      checkExpirations();
+    }, 10000); // Check every 10 seconds
+    return () => clearInterval(interval);
+  }, [tasks]);
+
+  const checkExpirations = () => {
+    const now = Date.now();
+    let pointsChange = 0;
+    let hasChanges = false;
+
+    const updatedTasks = tasks.map(task => {
+      // If task is active, has a due time, and the time has passed
+      if (!task.completed && !task.failed && task.dueTime && task.dueTime < now) {
+        hasChanges = true;
+        pointsChange -= task.penalty;
+        return { ...task, failed: true }; // Mark as failed
+      }
+      return task;
+    });
+
+    if (hasChanges) {
+      setTasks(updatedTasks);
+      if (pointsChange !== 0) updatePoints(pointsChange);
+      Alert.alert("Quest Failed!", "A quest expired. Penalty applied.");
+    }
+  };
 
   const saveData = async () => {
     try {
@@ -120,7 +164,7 @@ export default function App() {
     } catch (e) { console.error(e); }
   };
 
-  // --- Animation Logic ---
+  // --- Logic ---
   const triggerPointAnimation = (value) => {
     const id = Date.now().toString() + Math.random();
     setPopups(prev => [...prev, { id, value }]);
@@ -135,35 +179,46 @@ export default function App() {
     triggerPointAnimation(amount);
   };
 
-  // --- Logic: Tasks ---
   const addTask = () => {
     if (!taskInput.trim()) return;
     
-    const penaltyValue = parseInt(taskPenalty);
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+
+    const penaltyVal = parseInt(taskPenalty) || 0;
+    const rewardVal = parseInt(taskReward) || 10; // Default to 10 if empty
+    const durationVal = parseInt(taskDuration);
+
+    let dueTime = null;
+    if (!isNaN(durationVal) && durationVal > 0) {
+      dueTime = Date.now() + (durationVal * 60 * 1000); // Current time + minutes
+    }
 
     const newTask = { 
       id: Date.now().toString(), 
       text: taskInput, 
-      due: taskDue.trim(),
-      penalty: isNaN(penaltyValue) ? 0 : penaltyValue,
-      completed: false 
+      dueTime: dueTime,
+      penalty: penaltyVal,
+      reward: rewardVal,
+      completed: false,
+      failed: false
     };
     setTasks([newTask, ...tasks]);
     
-    // Reset inputs
     setTaskInput('');
-    setTaskDue('');
+    setTaskDuration('');
     setTaskPenalty('');
+    setTaskReward('');
     setShowTaskOptions(false);
   };
 
   const toggleTask = (id) => {
     setTasks(tasks.map(task => {
       if (task.id === id) {
+        if (task.failed) return task; // Cannot toggle failed tasks
+
         const isNowCompleted = !task.completed;
-        // Standard Reward: 10 points
-        if (isNowCompleted) updatePoints(10);
-        else updatePoints(-10); // Revert points if unchecked
+        if (isNowCompleted) updatePoints(task.reward);
+        else updatePoints(-task.reward);
         
         return { ...task, completed: isNowCompleted };
       }
@@ -172,15 +227,16 @@ export default function App() {
   };
 
   const deleteTask = (task) => {
-    // If task is incomplete and has a penalty, apply it
-    if (!task.completed && task.penalty > 0) {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.spring);
+    // If deleting an incomplete task with penalty (that hasn't failed yet)
+    if (!task.completed && !task.failed && task.penalty > 0) {
       Alert.alert(
-        "Task Failed!",
-        `Deleting this incomplete task will cost you ${task.penalty} points. Proceed?`,
+        "Abandon Quest?",
+        `Giving up will cost ${task.penalty} points.`,
         [
           { text: "Cancel", style: "cancel" },
           { 
-            text: "Accept Fate", 
+            text: "Abandon", 
             onPress: () => {
               updatePoints(-task.penalty);
               setTasks(tasks.filter(t => t.id !== task.id));
@@ -193,13 +249,15 @@ export default function App() {
     }
   };
 
-  // --- Logic: Rewards ---
   const addReward = () => {
     if (!rewardName.trim() || !rewardCost.trim()) return;
-    const cost = parseInt(rewardCost);
-    if (isNaN(cost)) return;
-
-    setRewards([...rewards, { id: Date.now().toString(), text: rewardName, cost }]);
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    
+    setRewards([...rewards, { 
+      id: Date.now().toString(), 
+      text: rewardName, 
+      cost: parseInt(rewardCost) 
+    }]);
     setRewardName('');
     setRewardCost('');
   };
@@ -207,165 +265,126 @@ export default function App() {
   const redeemReward = (reward) => {
     if (points >= reward.cost) {
       Alert.alert(
-        "Redeem Reward",
-        `Buy "${reward.text}" for ${reward.cost} points?`,
+        "Buy Reward",
+        `Purchase "${reward.text}"?`,
         [
           { text: "Cancel", style: "cancel" },
           { 
             text: "Buy", 
             onPress: () => {
               updatePoints(-reward.cost);
-              Alert.alert("Enjoy!", "You earned it.");
             }
           }
         ]
       );
     } else {
-      Alert.alert("Too Expensive", "Do more tasks to afford this!");
+      Alert.alert("Locked", "You need more XP to unlock this.");
     }
   };
 
   const deleteReward = (id) => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     setRewards(rewards.filter(r => r.id !== id));
   };
 
-  // --- Render Helpers ---
-  const renderHeader = () => (
-    <View style={styles.header}>
-      <View>
-        <Text style={styles.headerTitle}>GamifyLife</Text>
-        <Text style={styles.headerSubtitle}>Level Up Your Day</Text>
-      </View>
-      <View style={styles.pointsContainer}>
-        {/* Render Active Animations */}
-        {popups.map(p => (
-          <PointPopup key={p.id} id={p.id} value={p.value} onFinish={removePopup} />
-        ))}
-        <MaterialCommunityIcons name="star-face" size={24} color={COLORS.gold} />
-        <Text style={styles.pointsText}>{points}</Text>
-      </View>
-    </View>
-  );
+  // --- Time Formatter ---
+  const getRemainingTime = (dueTime) => {
+    if (!dueTime) return null;
+    const diff = dueTime - Date.now();
+    if (diff <= 0) return "Expired";
+    const minutes = Math.ceil(diff / 60000);
+    if (minutes > 60) return `${Math.floor(minutes/60)}h remaining`;
+    return `${minutes}m remaining`;
+  };
 
-  const renderTaskInput = () => (
-    <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.inputSection}>
-      <View style={styles.mainInputRow}>
-        <TextInput
-          style={styles.input}
-          placeholder="New Quest..."
-          placeholderTextColor={COLORS.textDim}
-          value={taskInput}
-          onChangeText={setTaskInput}
-        />
+  // --- Render Functions ---
+  const renderTaskItem = ({ item, index }) => (
+    <AnimatedItem index={index}>
+      <View style={[styles.card, item.failed && styles.cardFailed]}>
         <TouchableOpacity 
-          style={styles.optionsToggle} 
-          onPress={() => setShowTaskOptions(!showTaskOptions)}
+          onPress={() => toggleTask(item.id)} 
+          style={styles.checkboxContainer}
+          disabled={item.failed}
         >
           <MaterialCommunityIcons 
-            name={showTaskOptions ? "chevron-up" : "chevron-down"} 
-            size={24} color={COLORS.textDim} 
+            name={item.failed ? "close-box" : (item.completed ? "checkbox-marked" : "checkbox-blank-outline")} 
+            size={24} 
+            color={item.failed ? COLORS.danger : (item.completed ? COLORS.secondary : COLORS.textDim)} 
           />
         </TouchableOpacity>
-        <TouchableOpacity style={styles.addButton} onPress={addTask}>
-          <MaterialCommunityIcons name="plus" size={24} color="white" />
+        
+        <View style={{flex: 1}}>
+          <Text style={[styles.cardText, item.completed && styles.strikethrough, item.failed && styles.textFailed]}>
+            {item.text}
+          </Text>
+          
+          <View style={styles.metaRow}>
+            <Text style={[styles.metaText, {color: COLORS.secondary}]}>
+               <MaterialCommunityIcons name="trophy-outline" size={12} /> {item.reward} XP
+            </Text>
+            {item.dueTime && !item.completed && !item.failed && (
+               <Text style={[styles.metaText, { marginLeft: 10, color: COLORS.gold }]}>
+                 <MaterialCommunityIcons name="clock-outline" size={12} /> {getRemainingTime(item.dueTime)}
+               </Text>
+            )}
+            {item.failed && (
+               <Text style={[styles.metaText, { marginLeft: 10, color: COLORS.danger }]}>
+                 EXPIRED (-{item.penalty})
+               </Text>
+            )}
+          </View>
+        </View>
+
+        <TouchableOpacity onPress={() => deleteTask(item)}>
+          <MaterialCommunityIcons name="trash-can-outline" size={24} color={COLORS.textDim} />
         </TouchableOpacity>
       </View>
-
-      {showTaskOptions && (
-        <View style={styles.extraOptionsRow}>
-          <TextInput
-            style={[styles.inputSmall, { flex: 2 }]}
-            placeholder="Due (e.g. 5pm)"
-            placeholderTextColor={COLORS.textDim}
-            value={taskDue}
-            onChangeText={setTaskDue}
-          />
-          <TextInput
-            style={[styles.inputSmall, { flex: 1, marginLeft: 10 }]}
-            placeholder="Fail Pen."
-            placeholderTextColor={COLORS.textDim}
-            keyboardType="numeric"
-            value={taskPenalty}
-            onChangeText={setTaskPenalty}
-          />
-        </View>
-      )}
-    </KeyboardAvoidingView>
+    </AnimatedItem>
   );
 
-  const renderTaskItem = ({ item }) => (
-    <View style={styles.card}>
-      <TouchableOpacity onPress={() => toggleTask(item.id)} style={styles.checkboxContainer}>
-        <MaterialCommunityIcons 
-          name={item.completed ? "checkbox-marked" : "checkbox-blank-outline"} 
-          size={24} 
-          color={item.completed ? COLORS.secondary : COLORS.textDim} 
-        />
-      </TouchableOpacity>
-      
-      <View style={{flex: 1}}>
-        <Text style={[styles.cardText, item.completed && styles.strikethrough]}>
-          {item.text}
-        </Text>
-        {/* Meta Data Row */}
-        <View style={styles.metaRow}>
-          {item.due ? (
-             <Text style={styles.metaText}>
-               <MaterialCommunityIcons name="clock-outline" size={12} /> {item.due}
-             </Text>
-          ) : null}
-          {item.penalty > 0 && !item.completed ? (
-             <Text style={[styles.metaText, { color: COLORS.danger, marginLeft: 10 }]}>
-               <MaterialCommunityIcons name="alert-circle-outline" size={12} /> -{item.penalty} on fail
-             </Text>
-          ) : null}
+  const renderRewardItem = ({ item, index }) => (
+    <AnimatedItem index={index}>
+      <View style={styles.card}>
+        <View style={{flex: 1}}>
+          <Text style={styles.cardText}>{item.text}</Text>
+          <Text style={styles.costText}>{item.cost} Points</Text>
         </View>
+        <TouchableOpacity 
+          style={[styles.buyButton, points < item.cost && styles.disabledButton]}
+          onPress={() => redeemReward(item)}
+          disabled={points < item.cost}
+        >
+          <Text style={styles.buyButtonText}>Buy</Text>
+        </TouchableOpacity>
+        <TouchableOpacity onPress={() => deleteReward(item.id)} style={{marginLeft: 15}}>
+          <MaterialCommunityIcons name="close-circle-outline" size={24} color={COLORS.textDim} />
+        </TouchableOpacity>
       </View>
-
-      {item.completed && <Text style={styles.pointsBadge}>+10</Text>}
-      
-      <TouchableOpacity onPress={() => deleteTask(item)}>
-        <MaterialCommunityIcons name="trash-can-outline" size={24} color={COLORS.danger} />
-      </TouchableOpacity>
-    </View>
-  );
-
-  const renderRewardItem = ({ item }) => (
-    <View style={styles.card}>
-      <View style={{flex: 1}}>
-        <Text style={styles.cardText}>{item.text}</Text>
-        <Text style={styles.costText}>{item.cost} Points</Text>
-      </View>
-      <TouchableOpacity 
-        style={[styles.buyButton, points < item.cost && styles.disabledButton]}
-        onPress={() => redeemReward(item)}
-        disabled={points < item.cost}
-      >
-        <Text style={styles.buyButtonText}>Buy</Text>
-      </TouchableOpacity>
-      <TouchableOpacity onPress={() => deleteReward(item.id)} style={{marginLeft: 15}}>
-        <MaterialCommunityIcons name="close-circle-outline" size={24} color={COLORS.textDim} />
-      </TouchableOpacity>
-    </View>
+    </AnimatedItem>
   );
 
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor={COLORS.background} />
       
-      {renderHeader()}
+      {/* Header */}
+      <View style={styles.header}>
+        <View>
+          <Text style={styles.headerTitle}>GamifyLife</Text>
+          <Text style={styles.headerSubtitle}>XP: {points}</Text>
+        </View>
+        <View style={styles.pointsContainer}>
+          {popups.map(p => <PointPopup key={p.id} id={p.id} value={p.value} onFinish={removePopup} />)}
+          <MaterialCommunityIcons name="star-face" size={28} color={COLORS.gold} />
+        </View>
+      </View>
       
+      {/* Tabs */}
       <View style={styles.tabContainer}>
-        <TouchableOpacity 
-          style={[styles.tab, activeTab === 'tasks' && styles.activeTab]} 
-          onPress={() => setActiveTab('tasks')}
-        >
+        <TouchableOpacity style={[styles.tab, activeTab === 'tasks' && styles.activeTab]} onPress={() => setActiveTab('tasks')}>
           <Text style={[styles.tabText, activeTab === 'tasks' && styles.activeTabText]}>Quests</Text>
         </TouchableOpacity>
-        <TouchableOpacity 
-          style={[styles.tab, activeTab === 'rewards' && styles.activeTab]} 
-          onPress={() => setActiveTab('rewards')}
-        >
+        <TouchableOpacity style={[styles.tab, activeTab === 'rewards' && styles.activeTab]} onPress={() => setActiveTab('rewards')}>
           <Text style={[styles.tabText, activeTab === 'rewards' && styles.activeTabText]}>Rewards</Text>
         </TouchableOpacity>
       </View>
@@ -373,7 +392,58 @@ export default function App() {
       <View style={styles.content}>
         {activeTab === 'tasks' ? (
           <>
-            {renderTaskInput()}
+            {/* Task Input Section */}
+            <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.inputSection}>
+              <View style={styles.mainInputRow}>
+                <TextInput
+                  style={styles.input}
+                  placeholder="New Quest..."
+                  placeholderTextColor={COLORS.textDim}
+                  value={taskInput}
+                  onChangeText={setTaskInput}
+                />
+                <TouchableOpacity style={styles.optionsToggle} onPress={() => setShowTaskOptions(!showTaskOptions)}>
+                  <MaterialCommunityIcons name={showTaskOptions ? "chevron-up" : "chevron-down"} size={24} color={COLORS.textDim} />
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.addButton} onPress={addTask}>
+                  <MaterialCommunityIcons name="plus" size={24} color="white" />
+                </TouchableOpacity>
+              </View>
+
+              {showTaskOptions && (
+                <View style={styles.extraOptionsContainer}>
+                  <View style={styles.extraOptionsRow}>
+                    <TextInput
+                      style={[styles.inputSmall, { flex: 1, marginRight: 5 }]}
+                      placeholder="Minutes to expire"
+                      placeholderTextColor={COLORS.textDim}
+                      keyboardType="numeric"
+                      value={taskDuration}
+                      onChangeText={setTaskDuration}
+                    />
+                     <TextInput
+                      style={[styles.inputSmall, { flex: 1, marginLeft: 5 }]}
+                      placeholder="Penalty Pts"
+                      placeholderTextColor={COLORS.textDim}
+                      keyboardType="numeric"
+                      value={taskPenalty}
+                      onChangeText={setTaskPenalty}
+                    />
+                  </View>
+                  <View style={[styles.extraOptionsRow, { marginTop: 10 }]}>
+                    <TextInput
+                      style={[styles.inputSmall, { flex: 1 }]}
+                      placeholder="Reward Pts (Default: 10)"
+                      placeholderTextColor={COLORS.textDim}
+                      keyboardType="numeric"
+                      value={taskReward}
+                      onChangeText={setTaskReward}
+                    />
+                  </View>
+                </View>
+              )}
+            </KeyboardAvoidingView>
+            
             <FlatList
               data={tasks}
               renderItem={renderTaskItem}
@@ -431,8 +501,6 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     backgroundColor: COLORS.card,
-    borderBottomWidth: 1,
-    borderBottomColor: '#333',
     zIndex: 10,
   },
   headerTitle: {
@@ -441,34 +509,25 @@ const styles = StyleSheet.create({
     color: COLORS.primary,
   },
   headerSubtitle: {
-    fontSize: 14,
-    color: COLORS.textDim,
+    fontSize: 16,
+    color: COLORS.gold,
+    fontWeight: 'bold',
   },
   pointsContainer: {
-    flexDirection: 'row',
+    position: 'relative',
     alignItems: 'center',
-    backgroundColor: '#333',
-    paddingHorizontal: 15,
-    paddingVertical: 8,
-    borderRadius: 25,
-    borderWidth: 1,
-    borderColor: COLORS.gold,
-    position: 'relative', // For popup absolute positioning
-  },
-  pointsText: {
-    color: COLORS.gold,
-    fontSize: 20,
-    fontWeight: 'bold',
-    marginLeft: 5,
+    justifyContent: 'center',
+    width: 40, 
+    height: 40
   },
   // Animation Styles
   popupContainer: {
     position: 'absolute',
-    top: 20, 
-    left: 0, 
-    right: 0,
+    top: 0, 
+    right: 30, // Position next to the star
     alignItems: 'center',
     zIndex: 20,
+    width: 100
   },
   popupText: {
     fontSize: 24,
@@ -480,8 +539,9 @@ const styles = StyleSheet.create({
   // Tab Styles
   tabContainer: {
     flexDirection: 'row',
-    marginVertical: 15,
     marginHorizontal: 20,
+    marginTop: 10,
+    marginBottom: 20,
     backgroundColor: '#333',
     borderRadius: 10,
     padding: 4,
@@ -514,9 +574,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
+  extraOptionsContainer: {
+    marginTop: 10,
+    backgroundColor: '#2C2C2C',
+    padding: 10,
+    borderRadius: 10,
+  },
   extraOptionsRow: {
     flexDirection: 'row',
-    marginTop: 10,
   },
   input: {
     flex: 1,
@@ -527,7 +592,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   inputSmall: {
-    backgroundColor: COLORS.card,
+    backgroundColor: '#1a1a1a',
     color: COLORS.text,
     padding: 10,
     borderRadius: 8,
@@ -563,6 +628,11 @@ const styles = StyleSheet.create({
     shadowRadius: 3.84,
     elevation: 5,
   },
+  cardFailed: {
+    borderColor: COLORS.danger,
+    borderWidth: 1,
+    opacity: 0.8
+  },
   checkboxContainer: {
     marginRight: 15,
   },
@@ -572,6 +642,10 @@ const styles = StyleSheet.create({
     color: COLORS.text,
     marginBottom: 4,
   },
+  textFailed: {
+    color: COLORS.danger,
+    textDecorationLine: 'line-through'
+  },
   metaRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -579,15 +653,11 @@ const styles = StyleSheet.create({
   metaText: {
     color: COLORS.textDim,
     fontSize: 12,
+    fontWeight: '600'
   },
   strikethrough: {
     textDecorationLine: 'line-through',
     color: COLORS.textDim,
-  },
-  pointsBadge: {
-    color: COLORS.secondary,
-    fontWeight: 'bold',
-    marginRight: 15,
   },
   costText: {
     color: COLORS.gold,
