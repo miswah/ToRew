@@ -8,7 +8,10 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "set:path":"export ANDROID_HOME=/home/shahdil/Android/Sdk",
+    "android:build":"eas build --platform android --local --profile preview",
+    "android:build:cloud": "eas build --platform android --profile preview"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
