@@ -3,6 +3,7 @@ import { createContext, useContext, useEffect, useState } from 'react';
 import { Alert, AppState, LayoutAnimation, Platform, UIManager } from 'react-native';
 import { CONSTANTS } from '../constants/theme';
 import { getCurrentDateStr, getWeekNumber } from '../utils/helpers';
+import { cancelTaskReminder, scheduleTaskReminder } from '../utils/notifications';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -130,32 +131,59 @@ export const GameProvider = ({ children }) => {
 
   // --- Actions ---
   const actions = {
-    addTask: (taskData) => {
-        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-        setTasks([taskData, ...tasks]);
-    },
-    toggleTask: (id) => {
-        setTasks(tasks.map(t => {
-            if (t.id === id) {
-              if (t.failed) return t;
-              const isCompleting = !t.completed;
-              if (isCompleting) {
-                const bonus = t.streak * 5;
-                updatePoints(t.reward, bonus);
-                return { ...t, completed: true, streak: t.streak + 1, lastCompletedDate: getCurrentDateStr() };
-              } else {
-                const prevStreak = Math.max(0, t.streak - 1);
-                updatePoints(-(t.reward + (prevStreak * 5)));
-                return { ...t, completed: false, streak: prevStreak, lastCompletedDate: null };
+      addTask: async (taskData) => { // <--- Make Async
+          LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+          
+          // 1. Check for Reminder Time
+          let notificationId = null;
+          if (taskData.reminderTime && taskData.reminderTime.hours !== undefined) {
+             notificationId = await scheduleTaskReminder(
+               taskData.text, 
+               taskData.reminderTime.hours, 
+               taskData.reminderTime.minutes
+             );
+          }
+
+          // 2. Save Task with Notification ID
+          const newTask = { ...taskData, notificationId };
+          setTasks([newTask, ...tasks]);
+      },
+
+      toggleTask: (id) => {
+          setTasks(tasks.map(t => {
+              if (t.id === id) {
+                if (t.failed) return t;
+                const isCompleting = !t.completed;
+                
+                if (isCompleting) {
+                  // <--- Cancel Notification if task is done
+                  if (t.notificationId) cancelTaskReminder(t.notificationId);
+
+                  const bonus = t.streak * 5;
+                  updatePoints(t.reward, bonus);
+                  return { ...t, completed: true, streak: t.streak + 1, lastCompletedDate: getCurrentDateStr(), notificationId: null };
+                } else {
+                  // Undo completion (Note: We do NOT auto-reschedule notification here to keep logic simple)
+                  const prevStreak = Math.max(0, t.streak - 1);
+                  updatePoints(-(t.reward + (prevStreak * 5)));
+                  return { ...t, completed: false, streak: prevStreak, lastCompletedDate: null };
+                }
               }
-            }
-            return t;
-        }));
-    },
-    deleteTask: (id) => {
-        LayoutAnimation.configureNext(LayoutAnimation.Presets.spring);
-        setTasks(tasks.filter(t => t.id !== id));
-    },
+              return t;
+          }));
+      },
+
+      deleteTask: (id) => {
+          LayoutAnimation.configureNext(LayoutAnimation.Presets.spring);
+          const taskToDelete = tasks.find(t => t.id === id);
+          
+          // <--- Cancel Notification on delete
+          if (taskToDelete && taskToDelete.notificationId) {
+            cancelTaskReminder(taskToDelete.notificationId);
+          }
+
+          setTasks(tasks.filter(t => t.id !== id));
+      },
     addChallenge: (challengeData) => {
         LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
         setChallenges([challengeData, ...challenges]);

@@ -19,8 +19,11 @@ const DaySelector = ({ selectedDays, toggleDay }) => (
 
 export default function TasksScreen() {
   const { tasks, addTask, toggleTask, deleteTask } = useGame();
+  
+  // Inputs
   const [taskInput, setTaskInput] = useState('');
-  const [dueTimeStr, setDueTimeStr] = useState('');
+  const [dueTimeStr, setDueTimeStr] = useState(''); // HH:MM for Expiration
+  const [reminderTimeStr, setReminderTimeStr] = useState(''); // HH:MM for Notification <--- NEW
   const [taskPenalty, setTaskPenalty] = useState('');
   const [taskReward, setTaskReward] = useState('');
   const [selectedRepeatDays, setSelectedRepeatDays] = useState([]);
@@ -28,17 +31,47 @@ export default function TasksScreen() {
 
   const handleAdd = () => {
     if (!taskInput.trim()) return;
+
+    // Parse Expiration Time
     let dueMins = null;
     if (dueTimeStr.includes(':')) {
         const [h, m] = dueTimeStr.split(':').map(Number);
         if (!isNaN(h) && !isNaN(m)) dueMins = h * 60 + m;
     }
+
+    // Parse Notification Time
+    let reminderObj = null;
+    if (reminderTimeStr.includes(':')) {
+        const [h, m] = reminderTimeStr.split(':').map(Number);
+        if (!isNaN(h) && !isNaN(m)) {
+          reminderObj = { hours: h, minutes: m };
+        }
+    }
+
     addTask({
-        id: Date.now().toString(), text: taskInput, dueTimeMins: dueMins, dueDisplay: dueTimeStr,
-        penalty: parseInt(taskPenalty) || 0, reward: parseInt(taskReward) || 10, repeatDays: selectedRepeatDays,
-        streak: 0, completed: false, failed: false, lastCompletedDate: null
+        id: Date.now().toString(), 
+        text: taskInput, 
+        dueTimeMins: dueMins, 
+        dueDisplay: dueTimeStr,
+        reminderTime: reminderObj, // <--- Pass this to context
+        reminderDisplay: reminderTimeStr, 
+        penalty: parseInt(taskPenalty) || 0, 
+        reward: parseInt(taskReward) || 10, 
+        repeatDays: selectedRepeatDays,
+        streak: 0, 
+        completed: false, 
+        failed: false, 
+        lastCompletedDate: null
     });
-    setTaskInput(''); setDueTimeStr(''); setTaskPenalty(''); setTaskReward(''); setSelectedRepeatDays([]); setShowTaskOptions(false);
+
+    // Reset Forms
+    setTaskInput(''); 
+    setDueTimeStr(''); 
+    setReminderTimeStr(''); // <--- Reset
+    setTaskPenalty(''); 
+    setTaskReward(''); 
+    setSelectedRepeatDays([]); 
+    setShowTaskOptions(false);
   };
 
   const renderItem = ({ item }) => {
@@ -56,7 +89,16 @@ export default function TasksScreen() {
           </View>
           <View style={styles.metaRow}>
             <Text style={[styles.metaText, {color: COLORS.secondary}]}>{item.reward} XP</Text>
-            {item.dueDisplay ? <Text style={[styles.metaText, { marginLeft: 10, color: COLORS.gold }]}>{item.dueDisplay}</Text> : null}
+            
+            {/* Show Due Time */}
+            {item.dueDisplay ? <Text style={[styles.metaText, { marginLeft: 10, color: COLORS.danger }]}>Due: {item.dueDisplay}</Text> : null}
+
+            {/* Show Reminder Icon if set */}
+            {item.reminderDisplay ? (
+              <Text style={[styles.metaText, { marginLeft: 10, color: COLORS.blue }]}>
+                <MaterialCommunityIcons name="bell-ring-outline" size={12} /> {item.reminderDisplay}
+              </Text>
+            ) : null}
           </View>
         </View>
         <TouchableOpacity onPress={() => deleteTask(item.id)}><MaterialCommunityIcons name="trash-can-outline" size={20} color={COLORS.textDim} /></TouchableOpacity>
@@ -76,15 +118,39 @@ export default function TasksScreen() {
             <MaterialCommunityIcons name="plus" size={24} color="white" />
           </TouchableOpacity>
         </View>
+
         {showTaskOptions && (
           <View style={styles.optionsContainer}>
             <Text style={styles.sectionLabel}>Repeat On:</Text>
             <DaySelector selectedDays={selectedRepeatDays} toggleDay={(d) => setSelectedRepeatDays(p => p.includes(d) ? p.filter(x => x !== d) : [...p, d])} />
+            
             <View style={styles.extraRow}>
-              <TextInput style={styles.inputSmall} placeholder="Due (HH:MM)" placeholderTextColor={COLORS.textDim} value={dueTimeStr} onChangeText={setDueTimeStr} maxLength={5} />
-              <TextInput style={styles.inputSmall} placeholder="Penalty" placeholderTextColor={COLORS.textDim} keyboardType="numeric" value={taskPenalty} onChangeText={setTaskPenalty} />
-              <TextInput style={styles.inputSmall} placeholder="Reward" placeholderTextColor={COLORS.textDim} keyboardType="numeric" value={taskReward} onChangeText={setTaskReward} />
+              {/* Due Date Input */}
+              <View style={{flex: 1, marginRight: 5}}>
+                <Text style={styles.labelTiny}>Fail Time</Text>
+                <TextInput style={styles.inputSmall} placeholder="HH:MM" placeholderTextColor={COLORS.textDim} value={dueTimeStr} onChangeText={setDueTimeStr} maxLength={5} />
+              </View>
+
+              {/* NEW Reminder Input */}
+              <View style={{flex: 1, marginRight: 5}}>
+                <Text style={styles.labelTiny}>Reminder</Text>
+                <TextInput style={styles.inputSmall} placeholder="HH:MM" placeholderTextColor={COLORS.textDim} value={reminderTimeStr} onChangeText={setReminderTimeStr} maxLength={5} />
+              </View>
+
+              <View style={{flex: 1}}>
+                <Text style={styles.labelTiny}>Reward</Text>
+                <TextInput style={styles.inputSmall} placeholder="XP" placeholderTextColor={COLORS.textDim} keyboardType="numeric" value={taskReward} onChangeText={setTaskReward} />
+              </View>
             </View>
+            
+            <View style={[styles.extraRow, {marginTop: 10}]}>
+               <View style={{flex: 1}}>
+                <Text style={styles.labelTiny}>Penalty</Text>
+                <TextInput style={styles.inputSmall} placeholder="XP" placeholderTextColor={COLORS.textDim} keyboardType="numeric" value={taskPenalty} onChangeText={setTaskPenalty} />
+               </View>
+               <View style={{flex: 2}}></View>
+            </View>
+
           </View>
         )}
       </KeyboardAvoidingView>
@@ -93,7 +159,6 @@ export default function TasksScreen() {
   );
 }
 
-// Add Component Specific Styles
 const styles = StyleSheet.create({
   inputRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 15 },
   input: { flex: 1, backgroundColor: COLORS.card, color: 'white', padding: 15, borderRadius: 10 },
@@ -101,8 +166,9 @@ const styles = StyleSheet.create({
   optionsToggle: { padding: 10 },
   optionsContainer: { backgroundColor: '#252525', padding: 15, borderRadius: 10, marginBottom: 20 },
   sectionLabel: { color: COLORS.textDim, marginBottom: 10, fontSize: 12, fontWeight: 'bold' },
-  extraRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 15 },
-  inputSmall: { flex: 1, backgroundColor: '#1a1a1a', color: 'white', padding: 10, borderRadius: 8, marginHorizontal: 2, textAlign: 'center' },
+  extraRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 },
+  inputSmall: { width: '100%', backgroundColor: '#1a1a1a', color: 'white', padding: 10, borderRadius: 8, textAlign: 'center' },
+  labelTiny: { color: COLORS.textDim, fontSize: 10, marginBottom: 4, marginLeft: 2 },
   daySelector: { flexDirection: 'row', justifyContent: 'space-between' },
   dayCircle: { width: 35, height: 35, borderRadius: 18, backgroundColor: '#333', justifyContent: 'center', alignItems: 'center' },
   dayCircleActive: { backgroundColor: COLORS.primary },
@@ -116,6 +182,6 @@ const styles = StyleSheet.create({
   titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   streakBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#332200', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, marginLeft: 8 },
   streakText: { color: COLORS.gold, fontSize: 12, fontWeight: 'bold', marginLeft: 2 },
-  metaRow: { flexDirection: 'row', marginTop: 4 },
+  metaRow: { flexDirection: 'row', marginTop: 4, alignItems: 'center' },
   metaText: { fontSize: 12, color: COLORS.textDim },
 });

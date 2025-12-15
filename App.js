@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import React, { useEffect } from 'react'; // <--- Import useEffect
 import { Platform, SafeAreaView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import HeroSection from './src/components/hero/HeroSection';
 import { COLORS } from './src/constants/theme';
@@ -7,9 +7,14 @@ import ChallengesScreen from './src/screens/ChallengesScreen';
 import DailyLogScreen from './src/screens/DailyLogScreen';
 import RewardsScreen from './src/screens/RewardsScreen';
 import TasksScreen from './src/screens/TasksScreen';
+import { registerForPushNotificationsAsync } from './src/utils/notifications';
 
 function MainLayout() {
-  const [activeTab, setActiveTab] = useState('tasks');
+  const [activeTab, setActiveTab] = React.useState('tasks');
+
+  useEffect(() => {
+    registerForPushNotificationsAsync();
+  }, []);
 
   const renderContent = () => {
     switch (activeTab) {
@@ -27,7 +32,7 @@ function MainLayout() {
       
       <HeroSection />
 
-            <View style={styles.tabContainer}>
+      <View style={styles.tabContainer}>
         {['tasks', 'challenges', 'logs', 'rewards'].map(tab => (
           <TouchableOpacity 
             key={tab} 
@@ -61,7 +66,7 @@ const styles = StyleSheet.create({
   tabContainer: { flexDirection: 'row', marginHorizontal: 20, marginBottom: 15, backgroundColor: '#333', borderRadius: 10, padding: 4 },
   tab: { flex: 1, padding: 10, alignItems: 'center', borderRadius: 8 },
   activeTab: { backgroundColor: COLORS.primary },
-  tabText: { color: COLORS.textDim, fontWeight: '600', fontSize: 10 }, // Slightly smaller font to fit 4 tabs
+  tabText: { color: COLORS.textDim, fontWeight: '600', fontSize: 10 },
   activeTabText: { color: 'white' },
   content: { flex: 1, paddingHorizontal: 20 },
 });
