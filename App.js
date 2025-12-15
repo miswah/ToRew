@@ -2,22 +2,24 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useEffect, useRef, useState } from 'react';
 import {
-    Alert,
-    Animated,
-    AppState,
-    Easing,
-    FlatList,
-    KeyboardAvoidingView,
-    LayoutAnimation,
-    Platform,
-    SafeAreaView,
-    StatusBar,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    UIManager,
-    View
+  Alert,
+  Animated,
+  AppState,
+  Easing,
+  FlatList,
+  KeyboardAvoidingView,
+  LayoutAnimation,
+  Modal,
+  Platform,
+  SafeAreaView,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  UIManager,
+  View
 } from 'react-native';
 
 if (Platform.OS === 'android') {
@@ -27,7 +29,6 @@ if (Platform.OS === 'android') {
 }
 
 // --- Constants ---
-const LEVEL_THRESHOLD = 500; // XP needed to level up
 const COLORS = {
   background: '#121212',
   card: '#1E1E1E',
@@ -38,15 +39,16 @@ const COLORS = {
   textDim: '#AAAAAA',
   danger: '#CF6679',
   orange: '#FF9800',
-  blue: '#2196F3' // New color for challenges
+  blue: '#2196F3',
+  green: '#4CAF50'
 };
 
-const STORAGE_KEY = '@gamify_todo_v5';
+const LEVEL_THRESHOLD = 500;
+const STORAGE_KEY = '@gamify_todo_v6';
 const DAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 
-// --- Helper Functions ---
+// --- Helpers ---
 const getWeekNumber = (d) => {
-  // ISO week date helper
   d = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
   d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
   const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
@@ -105,12 +107,14 @@ export default function App() {
   const [tasks, setTasks] = useState([]);
   const [challenges, setChallenges] = useState([]);
   const [rewards, setRewards] = useState([]);
+  const [inventory, setInventory] = useState([]); // NEW: Purchased items
   const [popups, setPopups] = useState([]);
 
   // UI State
-  const [activeTab, setActiveTab] = useState('tasks'); // 'tasks', 'challenges', 'rewards'
+  const [activeTab, setActiveTab] = useState('tasks');
+  const [showLogModal, setShowLogModal] = useState(false); // NEW: Daily Log Modal
   
-  // -- Task Inputs --
+  // -- Inputs --
   const [taskInput, setTaskInput] = useState('');
   const [dueTimeStr, setDueTimeStr] = useState('');
   const [taskPenalty, setTaskPenalty] = useState('');
@@ -118,18 +122,16 @@ export default function App() {
   const [selectedRepeatDays, setSelectedRepeatDays] = useState([]);
   const [showTaskOptions, setShowTaskOptions] = useState(false);
 
-  // -- Challenge Inputs --
   const [challengeTitle, setChallengeTitle] = useState('');
   const [challengePoints, setChallengePoints] = useState('');
-  const [challengeType, setChallengeType] = useState('daily'); // 'daily' or 'weekly'
+  const [challengeType, setChallengeType] = useState('daily');
 
-  // -- Reward Inputs --
   const [rewardName, setRewardName] = useState('');
   const [rewardCost, setRewardCost] = useState('');
 
   // --- Lifecycle ---
   useEffect(() => { loadData(); }, []);
-  useEffect(() => { saveData(); }, [points, tasks, rewards, challenges]);
+  useEffect(() => { saveData(); }, [points, tasks, rewards, challenges, inventory]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener("change", nextAppState => {
@@ -143,10 +145,10 @@ export default function App() {
     return () => clearInterval(interval);
   }, [tasks]);
 
-  // --- Logic: Data Persistence ---
+  // --- Persistence ---
   const saveData = async () => {
     try {
-      const data = { points, tasks, rewards, challenges };
+      const data = { points, tasks, rewards, challenges, inventory };
       await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(data));
     } catch (e) {}
   };
@@ -160,19 +162,18 @@ export default function App() {
         setTasks(data.tasks || []);
         setRewards(data.rewards || []);
         setChallenges(data.challenges || []);
+        setInventory(data.inventory || []);
         checkForResets(data.tasks, data.challenges);
       }
     } catch (e) {}
   };
 
-  // --- Logic: Reset System ---
+  // --- Resets ---
   const checkForResets = (currentTasks = tasks, currentChallenges = challenges) => {
     const today = getCurrentDateStr();
     const currentWeek = getWeekNumber(new Date());
-
     let needsUpdate = false;
 
-    // 1. Reset Repeating Tasks (Daily)
     const updatedTasks = currentTasks.map(t => {
       if (t.repeatDays.length > 0 && t.completed && t.lastCompletedDate !== today) {
         needsUpdate = true;
@@ -181,14 +182,11 @@ export default function App() {
       return t;
     });
 
-    // 2. Reset Challenges (Daily & Weekly)
     const updatedChallenges = currentChallenges.map(c => {
-      // Daily Reset
       if (c.type === 'daily' && c.completed && c.lastCompletedDate !== today) {
         needsUpdate = true;
         return { ...c, completed: false };
       }
-      // Weekly Reset
       if (c.type === 'weekly' && c.completed && c.lastCompletedWeek !== currentWeek) {
         needsUpdate = true;
         return { ...c, completed: false };
@@ -202,7 +200,6 @@ export default function App() {
     }
   };
 
-  // --- Logic: Expirations (Tasks only) ---
   const checkExpirations = () => {
     const now = new Date();
     const currentMins = now.getHours() * 60 + now.getMinutes();
@@ -231,7 +228,7 @@ export default function App() {
     }
   };
 
-  // --- Logic: Points ---
+  // --- Actions ---
   const updatePoints = (amount, bonus = 0) => {
     setPoints(prev => Math.max(0, prev + amount + bonus));
     const id = Date.now().toString() + Math.random();
@@ -240,33 +237,21 @@ export default function App() {
 
   const removePopup = (id) => setPopups(prev => prev.filter(p => p.id !== id));
 
-  // --- Logic: Tasks ---
+  // --- Task Logic ---
   const addTask = () => {
     if (!taskInput.trim()) return;
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-
     let dueMins = null;
     if (dueTimeStr.includes(':')) {
       const [h, m] = dueTimeStr.split(':').map(Number);
       if (!isNaN(h) && !isNaN(m)) dueMins = h * 60 + m;
     }
-
     setTasks([{
-      id: Date.now().toString(),
-      text: taskInput,
-      dueTimeMins: dueMins,
-      dueDisplay: dueTimeStr,
-      penalty: parseInt(taskPenalty) || 0,
-      reward: parseInt(taskReward) || 10,
-      repeatDays: selectedRepeatDays,
-      streak: 0,
-      completed: false,
-      failed: false,
-      lastCompletedDate: null
+      id: Date.now().toString(), text: taskInput, dueTimeMins: dueMins, dueDisplay: dueTimeStr,
+      penalty: parseInt(taskPenalty) || 0, reward: parseInt(taskReward) || 10, repeatDays: selectedRepeatDays,
+      streak: 0, completed: false, failed: false, lastCompletedDate: null
     }, ...tasks]);
-
-    setTaskInput(''); setDueTimeStr(''); setTaskPenalty(''); 
-    setTaskReward(''); setSelectedRepeatDays([]); setShowTaskOptions(false);
+    setTaskInput(''); setDueTimeStr(''); setTaskPenalty(''); setTaskReward(''); setSelectedRepeatDays([]); setShowTaskOptions(false);
   };
 
   const toggleTask = (id) => {
@@ -279,7 +264,6 @@ export default function App() {
           updatePoints(t.reward, bonus);
           return { ...t, completed: true, streak: t.streak + 1, lastCompletedDate: getCurrentDateStr() };
         } else {
-          // Undo
           const prevStreak = Math.max(0, t.streak - 1);
           const bonusWas = prevStreak * 5;
           updatePoints(-(t.reward + bonusWas));
@@ -295,22 +279,14 @@ export default function App() {
     setTasks(tasks.filter(t => t.id !== id));
   };
 
-  // --- Logic: Challenges ---
+  // --- Challenge Logic ---
   const addChallenge = () => {
     if (!challengeTitle.trim()) return;
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    
     setChallenges([{
-      id: Date.now().toString(),
-      title: challengeTitle,
-      reward: parseInt(challengePoints) || 50,
-      type: challengeType, // 'daily' or 'weekly'
-      streak: 0,
-      completed: false,
-      lastCompletedDate: null,
-      lastCompletedWeek: null
+      id: Date.now().toString(), title: challengeTitle, reward: parseInt(challengePoints) || 50,
+      type: challengeType, streak: 0, completed: false, lastCompletedDate: null, lastCompletedWeek: null
     }, ...challenges]);
-
     setChallengeTitle(''); setChallengePoints('');
   };
 
@@ -318,26 +294,13 @@ export default function App() {
     setChallenges(challenges.map(c => {
       if (c.id === id) {
         const isCompleting = !c.completed;
+        const multiplier = c.type === 'daily' ? 10 : 50;
         if (isCompleting) {
-          // Daily Streak Bonus = Streak * 10
-          // Weekly Streak Bonus = Streak * 50
-          const multiplier = c.type === 'daily' ? 10 : 50;
-          const bonus = c.streak * multiplier;
-          
-          updatePoints(c.reward, bonus);
-          return { 
-            ...c, 
-            completed: true, 
-            streak: c.streak + 1,
-            lastCompletedDate: getCurrentDateStr(),
-            lastCompletedWeek: getWeekNumber(new Date())
-          };
+          updatePoints(c.reward, c.streak * multiplier);
+          return { ...c, completed: true, streak: c.streak + 1, lastCompletedDate: getCurrentDateStr(), lastCompletedWeek: getWeekNumber(new Date()) };
         } else {
-          // Undo
           const prevStreak = Math.max(0, c.streak - 1);
-          const multiplier = c.type === 'daily' ? 10 : 50;
-          const bonusWas = prevStreak * multiplier;
-          updatePoints(-(c.reward + bonusWas));
+          updatePoints(-(c.reward + (prevStreak * multiplier)));
           return { ...c, completed: false, streak: prevStreak };
         }
       }
@@ -350,85 +313,96 @@ export default function App() {
     setChallenges(challenges.filter(c => c.id !== id));
   };
 
-  // --- Logic: Rewards ---
+  // --- Reward & Inventory Logic ---
   const addReward = () => {
     if (!rewardName || !rewardCost) return;
     setRewards([...rewards, { id: Date.now().toString(), text: rewardName, cost: parseInt(rewardCost) }]);
     setRewardName(''); setRewardCost('');
   };
 
-  const redeemReward = (r) => {
+  const buyReward = (r) => {
     if (points >= r.cost) {
-      Alert.alert("Redeem", `Spend ${r.cost} XP?`, [{ text: "Cancel" }, { text: "Yes", onPress: () => updatePoints(-r.cost) }]);
+      updatePoints(-r.cost);
+      // Add to inventory with a unique instance ID
+      const inventoryItem = { 
+        ...r, 
+        instanceId: Date.now().toString(), 
+        purchaseDate: new Date().toLocaleDateString() 
+      };
+      setInventory([inventoryItem, ...inventory]);
+      Alert.alert("Purchased!", `${r.text} added to Inventory.`);
     } else Alert.alert("Locked", "Not enough XP");
   };
 
-  const deleteReward = (id) => setRewards(rewards.filter(r => r.id !== id));
+  const redeemReward = (item) => {
+    Alert.alert(
+      "Redeem Item", 
+      `Use "${item.text}" now? This will remove it from inventory.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        { 
+          text: "Redeem", 
+          onPress: () => {
+            LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+            setInventory(inventory.filter(i => i.instanceId !== item.instanceId));
+            Alert.alert("Success", "Reward redeemed. Enjoy!");
+          }
+        }
+      ]
+    );
+  };
+
+  const deleteRewardStoreItem = (id) => setRewards(rewards.filter(r => r.id !== id));
 
   // --- Renderers ---
-const renderHeader = () => {
-    // 1. Level Logic
+
+  const renderHeader = () => {
     const currentLevel = Math.floor(points / LEVEL_THRESHOLD) + 1;
     const xpTowardsNext = points % LEVEL_THRESHOLD;
     const levelProgress = (xpTowardsNext / LEVEL_THRESHOLD) * 100;
 
-    // 2. Daily Task Progress Logic
-    const today = getCurrentDateStr(); // Ensure this helper exists in your scope (it's in the previous code)
-    const dailyTasks = tasks.filter(t => {
-      // Only count tasks that are meant for today (repeating or one-off)
-      const todayIndex = new Date().getDay();
-      return t.repeatDays.length === 0 || t.repeatDays.includes(todayIndex);
-    });
+    const todayIndex = new Date().getDay();
+    const dailyTasks = tasks.filter(t => t.repeatDays.length === 0 || t.repeatDays.includes(todayIndex));
     const totalDaily = dailyTasks.length;
     const completedDaily = dailyTasks.filter(t => t.completed).length;
     const dailyPercent = totalDaily === 0 ? 0 : (completedDaily / totalDaily) * 100;
 
     return (
       <View style={styles.heroContainer}>
-        {/* Top Row: Title & Animation Anchor */}
         <View style={styles.heroTop}>
           <View>
             <Text style={styles.heroTitle}>GAMIFY<Text style={{color: COLORS.primary}}>LIFE</Text></Text>
             <Text style={styles.heroDate}>{new Date().toDateString()}</Text>
           </View>
-          
-          {/* Points Popup Anchor */}
           <View style={styles.pointsAnchor}>
             {popups.map(p => <PointPopup key={p.id} {...p} onFinish={removePopup} />)}
             <View style={styles.streakBadgeHeader}>
-              <MaterialCommunityIcons name="fire" size={20} color={COLORS.orange} />
-              {/* Calculate total streak across all tasks for a 'global' streak vibe if desired, or just show an icon */}
+               <MaterialCommunityIcons name="star" size={20} color={COLORS.gold} />
             </View>
           </View>
         </View>
 
-        {/* Middle Row: Level & XP Bar */}
         <View style={styles.levelCard}>
           <View style={styles.levelBadge}>
             <Text style={styles.levelLabel}>LVL</Text>
             <Text style={styles.levelValue}>{currentLevel}</Text>
           </View>
-
           <View style={styles.xpSection}>
             <View style={styles.xpTextRow}>
               <Text style={styles.xpLabel}>Experience</Text>
               <Text style={styles.xpValue}>{xpTowardsNext} <Text style={{color: '#666'}}>/</Text> {LEVEL_THRESHOLD} XP</Text>
             </View>
-            
-            {/* XP Bar */}
             <View style={styles.progressBarBg}>
               <View style={[styles.progressBarFill, { width: `${levelProgress}%`, backgroundColor: COLORS.gold }]} />
             </View>
           </View>
         </View>
 
-        {/* Bottom Row: Daily Quest Progress */}
         <View style={styles.dailyTracker}>
           <View style={styles.trackerRow}>
             <Text style={styles.trackerLabel}>Daily Quests</Text>
             <Text style={styles.trackerValue}>{completedDaily}/{totalDaily}</Text>
           </View>
-          {/* Daily Bar */}
           <View style={[styles.progressBarBg, { height: 6, marginTop: 5, backgroundColor: '#333' }]}>
             <View style={[styles.progressBarFill, { width: `${dailyPercent}%`, backgroundColor: COLORS.secondary }]} />
           </View>
@@ -437,29 +411,60 @@ const renderHeader = () => {
     );
   };
 
-  const renderTabs = () => (
-    <View style={styles.tabContainer}>
-      {['tasks', 'challenges', 'rewards'].map(tab => (
-        <TouchableOpacity 
-          key={tab} 
-          style={[styles.tab, activeTab === tab && styles.activeTab]} 
-          onPress={() => setActiveTab(tab)}
-        >
-          <Text style={[styles.tabText, activeTab === tab && styles.activeTabText]}>
-            {tab.charAt(0).toUpperCase() + tab.slice(1)}
-          </Text>
-        </TouchableOpacity>
-      ))}
-    </View>
-  );
+  const renderDailyLogModal = () => {
+    const today = getCurrentDateStr();
+    // Get all tasks completed today
+    const completedToday = tasks.filter(t => t.completed && t.lastCompletedDate === today);
+    
+    return (
+      <Modal animationType="slide" transparent={true} visible={showLogModal} onRequestClose={() => setShowLogModal(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Today's Log</Text>
+              <TouchableOpacity onPress={() => setShowLogModal(false)}>
+                <MaterialCommunityIcons name="close" size={24} color="white" />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.modalSubtitle}>Tasks completed: {completedToday.length}</Text>
+            <ScrollView style={{maxHeight: 400}}>
+              {completedToday.length === 0 ? (
+                <Text style={{color: COLORS.textDim, textAlign: 'center', marginTop: 20}}>No tasks completed today yet.</Text>
+              ) : (
+                completedToday.map(t => (
+                  <View key={t.id} style={styles.logItem}>
+                    <MaterialCommunityIcons name="check-circle" size={16} color={COLORS.secondary} />
+                    <Text style={styles.logText}>{t.text}</Text>
+                    <Text style={styles.logPoints}>+{t.reward} XP</Text>
+                  </View>
+                ))
+              )}
+            </ScrollView>
+            <TouchableOpacity style={styles.closeModalBtn} onPress={() => setShowLogModal(false)}>
+              <Text style={styles.closeModalText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    );
+  };
 
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor={COLORS.background} />
       {renderHeader()}
-      {renderTabs()}
+      {renderDailyLogModal()}
+
+      <View style={styles.tabContainer}>
+        {['tasks', 'challenges', 'rewards'].map(tab => (
+          <TouchableOpacity key={tab} style={[styles.tab, activeTab === tab && styles.activeTab]} onPress={() => setActiveTab(tab)}>
+            <Text style={[styles.tabText, activeTab === tab && styles.activeTabText]}>{tab.toUpperCase()}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
 
       <View style={styles.content}>
+        {/* --- TASKS TAB --- */}
         {activeTab === 'tasks' && (
           <>
             <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"}>
@@ -475,9 +480,7 @@ const renderHeader = () => {
               {showTaskOptions && (
                 <View style={styles.optionsContainer}>
                   <Text style={styles.sectionLabel}>Repeat On:</Text>
-                  <DaySelector selectedDays={selectedRepeatDays} toggleDay={(d) => {
-                    setSelectedRepeatDays(prev => prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d]);
-                  }} />
+                  <DaySelector selectedDays={selectedRepeatDays} toggleDay={(d) => setSelectedRepeatDays(p => p.includes(d) ? p.filter(x => x !== d) : [...p, d])} />
                   <View style={styles.extraRow}>
                     <TextInput style={styles.inputSmall} placeholder="Due (HH:MM)" placeholderTextColor={COLORS.textDim} value={dueTimeStr} onChangeText={setDueTimeStr} maxLength={5} />
                     <TextInput style={styles.inputSmall} placeholder="Penalty" placeholderTextColor={COLORS.textDim} keyboardType="numeric" value={taskPenalty} onChangeText={setTaskPenalty} />
@@ -516,10 +519,17 @@ const renderHeader = () => {
           </>
         )}
 
+        {/* --- CHALLENGES TAB --- */}
         {activeTab === 'challenges' && (
-          <>
+          <ScrollView contentContainerStyle={{paddingBottom: 100}}>
+             {/* Daily Log Button */}
+             <TouchableOpacity style={styles.logButton} onPress={() => setShowLogModal(true)}>
+                <MaterialCommunityIcons name="history" size={20} color="white" />
+                <Text style={styles.logButtonText}>View Today's Completed Tasks</Text>
+             </TouchableOpacity>
+
             <View style={styles.inputRow}>
-              <TextInput style={[styles.input, {flex: 2}]} placeholder="Challenge Goal" placeholderTextColor={COLORS.textDim} value={challengeTitle} onChangeText={setChallengeTitle} />
+              <TextInput style={[styles.input, {flex: 2}]} placeholder="New Challenge" placeholderTextColor={COLORS.textDim} value={challengeTitle} onChangeText={setChallengeTitle} />
               <TextInput style={[styles.input, {flex: 1, marginLeft: 5}]} placeholder="XP" placeholderTextColor={COLORS.textDim} keyboardType="numeric" value={challengePoints} onChangeText={setChallengePoints} />
               <TouchableOpacity style={[styles.addButton, {marginLeft: 5}]} onPress={addChallenge}>
                 <MaterialCommunityIcons name="plus" size={24} color="white" />
@@ -534,18 +544,16 @@ const renderHeader = () => {
               </TouchableOpacity>
             </View>
 
-            <FlatList
-              data={challenges}
-              keyExtractor={item => item.id}
-              contentContainerStyle={{ paddingBottom: 100 }}
-              renderItem={({ item }) => (
-                <View style={[styles.card, { borderColor: item.type === 'weekly' ? COLORS.gold : COLORS.blue, borderWidth: 1 }]}>
+            {/* Active Challenges */}
+            <Text style={styles.sectionHeader}>Active</Text>
+            {challenges.filter(c => !c.completed).map(item => (
+                <View key={item.id} style={[styles.card, { borderColor: item.type === 'weekly' ? COLORS.gold : COLORS.blue, borderWidth: 1 }]}>
                   <TouchableOpacity onPress={() => toggleChallenge(item.id)} style={styles.checkboxContainer}>
-                     <MaterialCommunityIcons name={item.completed ? "trophy" : "trophy-outline"} size={24} color={item.completed ? COLORS.gold : COLORS.textDim} />
+                     <MaterialCommunityIcons name="trophy-outline" size={24} color={COLORS.textDim} />
                   </TouchableOpacity>
                   <View style={{flex: 1}}>
                     <View style={styles.titleRow}>
-                      <Text style={[styles.cardText, item.completed && styles.strikethrough]}>{item.title}</Text>
+                      <Text style={styles.cardText}>{item.title}</Text>
                       <View style={[styles.streakBadge, { backgroundColor: '#222' }]}>
                         <MaterialCommunityIcons name="lightning-bolt" size={14} color={COLORS.gold} />
                         <Text style={styles.streakText}>{item.streak}</Text>
@@ -558,13 +566,52 @@ const renderHeader = () => {
                   </View>
                   <TouchableOpacity onPress={() => deleteChallenge(item.id)}><MaterialCommunityIcons name="close" size={20} color={COLORS.textDim} /></TouchableOpacity>
                 </View>
-              )}
-            />
-          </>
+            ))}
+
+            {/* Completed Challenges */}
+            {challenges.filter(c => c.completed).length > 0 && (
+              <>
+                <Text style={[styles.sectionHeader, {marginTop: 20}]}>Completed</Text>
+                {challenges.filter(c => c.completed).map(item => (
+                  <View key={item.id} style={[styles.card, { opacity: 0.6 }]}>
+                    <TouchableOpacity onPress={() => toggleChallenge(item.id)} style={styles.checkboxContainer}>
+                      <MaterialCommunityIcons name="trophy" size={24} color={COLORS.gold} />
+                    </TouchableOpacity>
+                    <View style={{flex: 1}}>
+                      <Text style={[styles.cardText, styles.strikethrough]}>{item.title}</Text>
+                      <Text style={{color: COLORS.gold, fontSize: 12}}>Completed!</Text>
+                    </View>
+                    <TouchableOpacity onPress={() => deleteChallenge(item.id)}><MaterialCommunityIcons name="close" size={20} color={COLORS.textDim} /></TouchableOpacity>
+                  </View>
+                ))}
+              </>
+            )}
+          </ScrollView>
         )}
 
+        {/* --- REWARDS TAB --- */}
         {activeTab === 'rewards' && (
-          <>
+          <ScrollView contentContainerStyle={{paddingBottom: 100}}>
+            
+            {/* Inventory Section */}
+            {inventory.length > 0 && (
+              <View style={styles.inventoryContainer}>
+                <Text style={styles.sectionHeader}>My Inventory (Ready to Redeem)</Text>
+                {inventory.map((item) => (
+                  <View key={item.instanceId} style={styles.inventoryCard}>
+                    <View style={{flex: 1}}>
+                      <Text style={styles.cardText}>{item.text}</Text>
+                      <Text style={{color: COLORS.textDim, fontSize: 10}}>Bought: {item.purchaseDate}</Text>
+                    </View>
+                    <TouchableOpacity style={styles.redeemButton} onPress={() => redeemReward(item)}>
+                      <Text style={styles.redeemText}>Redeem</Text>
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </View>
+            )}
+
+            <Text style={styles.sectionHeader}>Shop</Text>
             <View style={styles.inputRow}>
               <TextInput style={[styles.input, {flex: 2}]} placeholder="Reward Name" placeholderTextColor={COLORS.textDim} value={rewardName} onChangeText={setRewardName} />
               <TextInput style={[styles.input, {flex: 1, marginLeft: 10}]} placeholder="Cost" placeholderTextColor={COLORS.textDim} keyboardType="numeric" value={rewardCost} onChangeText={setRewardCost} />
@@ -572,25 +619,22 @@ const renderHeader = () => {
                  <MaterialCommunityIcons name="plus" size={24} color="white" />
               </TouchableOpacity>
             </View>
-            <FlatList 
-              data={rewards} 
-              keyExtractor={item => item.id}
-              renderItem={({item}) => (
-                <View style={styles.card}>
-                  <View style={{flex: 1}}>
-                    <Text style={styles.cardText}>{item.text}</Text>
-                    <Text style={{color: COLORS.gold, fontSize: 12}}>{item.cost} XP</Text>
-                  </View>
-                  <TouchableOpacity style={[styles.buyButton, points < item.cost && {backgroundColor: '#444'}]} onPress={() => redeemReward(item)} disabled={points < item.cost}>
-                    <Text style={{color: 'white', fontWeight: 'bold', fontSize: 12}}>Buy</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={() => deleteReward(item.id)} style={{marginLeft: 15}}>
-                    <MaterialCommunityIcons name="close" size={20} color={COLORS.textDim} />
-                  </TouchableOpacity>
+            
+            {rewards.map((item) => (
+              <View key={item.id} style={styles.card}>
+                <View style={{flex: 1}}>
+                  <Text style={styles.cardText}>{item.text}</Text>
+                  <Text style={{color: COLORS.gold, fontSize: 12}}>{item.cost} XP</Text>
                 </View>
-              )}
-            />
-          </>
+                <TouchableOpacity style={[styles.buyButton, points < item.cost && {backgroundColor: '#444'}]} onPress={() => buyReward(item)} disabled={points < item.cost}>
+                  <Text style={{color: 'white', fontWeight: 'bold', fontSize: 12}}>Buy</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => deleteRewardStoreItem(item.id)} style={{marginLeft: 15}}>
+                  <MaterialCommunityIcons name="close" size={20} color={COLORS.textDim} />
+                </TouchableOpacity>
+              </View>
+            ))}
+          </ScrollView>
         )}
       </View>
     </SafeAreaView>
@@ -599,190 +643,43 @@ const renderHeader = () => {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background, paddingTop: Platform.OS === 'android' ? 30 : 0 },
-  header: { padding: 20, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: COLORS.card, zIndex: 10 },
-  headerTitle: { fontSize: 24, fontWeight: 'bold', color: COLORS.primary },
-  headerSubtitle: { fontSize: 16, color: COLORS.gold, fontWeight: 'bold' },
-  pointsContainer: { position: 'relative', width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
-  popupContainer: { position: 'absolute', top: 0, right: 40, width: 150, alignItems: 'flex-end', zIndex: 99 },
-  popupText: { fontSize: 18, fontWeight: 'bold', textAlign: 'right' },
-  tabContainer: { flexDirection: 'row', marginHorizontal: 20, marginVertical: 10, backgroundColor: '#333', borderRadius: 10, padding: 4 },
-  tab: { flex: 1, padding: 10, alignItems: 'center', borderRadius: 8 },
-  activeTab: { backgroundColor: COLORS.primary },
-  tabText: { color: COLORS.textDim, fontWeight: '600', fontSize: 12 },
-  activeTabText: { color: 'white' },
-  content: { flex: 1, paddingHorizontal: 20 },
-  inputRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 15 },
-  input: { flex: 1, backgroundColor: COLORS.card, color: 'white', padding: 15, borderRadius: 10 },
-  addButton: { backgroundColor: COLORS.secondary, width: 50, height: 50, borderRadius: 10, justifyContent: 'center', alignItems: 'center', marginLeft: 10 },
-  optionsToggle: { padding: 10 },
-  optionsContainer: { backgroundColor: '#252525', padding: 15, borderRadius: 10, marginBottom: 20 },
-  sectionLabel: { color: COLORS.textDim, marginBottom: 10, fontSize: 12, fontWeight: 'bold' },
-  extraRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 15 },
-  inputSmall: { flex: 1, backgroundColor: '#1a1a1a', color: 'white', padding: 10, borderRadius: 8, marginHorizontal: 2, textAlign: 'center' },
-  daySelector: { flexDirection: 'row', justifyContent: 'space-between' },
-  dayCircle: { width: 35, height: 35, borderRadius: 18, backgroundColor: '#333', justifyContent: 'center', alignItems: 'center' },
-  dayCircleActive: { backgroundColor: COLORS.primary },
-  dayText: { color: COLORS.textDim, fontSize: 12 },
-  dayTextActive: { color: 'white', fontWeight: 'bold' },
-  card: { backgroundColor: COLORS.card, borderRadius: 12, padding: 15, marginBottom: 10, flexDirection: 'row', alignItems: 'center' },
-  cardFailed: { borderColor: COLORS.danger, borderWidth: 1 },
-  checkboxContainer: { marginRight: 15 },
-  cardText: { color: 'white', fontSize: 16, fontWeight: '500' },
-  strikethrough: { textDecorationLine: 'line-through', color: COLORS.textDim },
-  titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  streakBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#332200', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, marginLeft: 8 },
-  streakText: { color: COLORS.gold, fontSize: 12, fontWeight: 'bold', marginLeft: 2 },
-  metaRow: { flexDirection: 'row', marginTop: 4 },
-  metaText: { fontSize: 12, color: COLORS.textDim },
-  buyButton: { backgroundColor: COLORS.primary, paddingHorizontal: 15, paddingVertical: 8, borderRadius: 20 },
-  typeSelector: { flexDirection: 'row', marginBottom: 15, justifyContent: 'center' },
-  typeBtn: { paddingVertical: 6, paddingHorizontal: 20, backgroundColor: '#333', marginHorizontal: 5, borderRadius: 20 },
-  typeBtnActive: { backgroundColor: COLORS.blue },
-    typeText: { color: 'white', fontWeight: 'bold', fontSize: 12 },
-  container: { flex: 1, backgroundColor: COLORS.background, paddingTop: Platform.OS === 'android' ? 30 : 0 },
   
-  // --- HERO / HEADER STYLES ---
-  heroContainer: {
-    backgroundColor: COLORS.card,
-    padding: 20,
-    borderBottomLeftRadius: 24,
-    borderBottomRightRadius: 24,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4.65,
-    elevation: 8,
-    marginBottom: 15,
-    zIndex: 10
-  },
-  heroTop: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 15,
-  },
-  heroTitle: {
-    fontSize: 22,
-    fontWeight: '900', // Extra bold
-    color: 'white',
-    letterSpacing: 1,
-  },
-  heroDate: {
-    color: COLORS.textDim,
-    fontSize: 12,
-    marginTop: 2,
-    textTransform: 'uppercase',
-    fontWeight: '600'
-  },
-  pointsAnchor: {
-    position: 'relative',
-    alignItems: 'flex-end',
-    justifyContent: 'center',
-    width: 60,
-  },
-  streakBadgeHeader: {
-    backgroundColor: '#332200', 
-    padding: 8, 
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 152, 0, 0.3)'
-  },
-
-  // --- Level Card ---
-  levelCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 15,
-  },
-  levelBadge: {
-    width: 60,
-    height: 60,
-    borderRadius: 20,
-    backgroundColor: '#2A2A2A',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 2,
-    borderColor: COLORS.primary,
-    marginRight: 15,
-    shadowColor: COLORS.primary,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.4,
-    shadowRadius: 10,
-  },
-  levelLabel: {
-    fontSize: 10,
-    color: COLORS.textDim,
-    fontWeight: 'bold',
-  },
-  levelValue: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: 'white',
-  },
-  xpSection: {
-    flex: 1,
-  },
-  xpTextRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 6,
-  },
-  xpLabel: {
-    color: COLORS.textDim,
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  xpValue: {
-    color: COLORS.gold,
-    fontSize: 12,
-    fontWeight: 'bold',
-  },
+  // Header / Hero
+  heroContainer: { backgroundColor: COLORS.card, padding: 20, borderBottomLeftRadius: 24, borderBottomRightRadius: 24, shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 4.65, elevation: 8, marginBottom: 15, zIndex: 10 },
+  heroTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 15 },
+  heroTitle: { fontSize: 22, fontWeight: '900', color: 'white', letterSpacing: 1 },
+  heroDate: { color: COLORS.textDim, fontSize: 12, marginTop: 2, textTransform: 'uppercase', fontWeight: '600' },
+  pointsAnchor: { position: 'relative', alignItems: 'flex-end', justifyContent: 'center', width: 60 },
+  streakBadgeHeader: { backgroundColor: '#332200', padding: 8, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(255, 152, 0, 0.3)' },
+  levelCard: { flexDirection: 'row', alignItems: 'center', marginBottom: 15 },
+  levelBadge: { width: 60, height: 60, borderRadius: 20, backgroundColor: '#2A2A2A', justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: COLORS.primary, marginRight: 15 },
+  levelLabel: { fontSize: 10, color: COLORS.textDim, fontWeight: 'bold' },
+  levelValue: { fontSize: 24, fontWeight: 'bold', color: 'white' },
+  xpSection: { flex: 1 },
+  xpTextRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
+  xpLabel: { color: COLORS.textDim, fontSize: 12, fontWeight: '600' },
+  xpValue: { color: COLORS.gold, fontSize: 12, fontWeight: 'bold' },
+  progressBarBg: { height: 10, backgroundColor: '#111', borderRadius: 5, overflow: 'hidden' },
+  progressBarFill: { height: '100%', borderRadius: 5 },
+  dailyTracker: { backgroundColor: '#252525', borderRadius: 12, padding: 12 },
+  trackerRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 2 },
+  trackerLabel: { color: 'white', fontSize: 12, fontWeight: '600' },
+  trackerValue: { color: COLORS.secondary, fontSize: 12, fontWeight: 'bold' },
   
-  // --- Progress Bars ---
-  progressBarBg: {
-    height: 10,
-    backgroundColor: '#111',
-    borderRadius: 5,
-    overflow: 'hidden',
-  },
-  progressBarFill: {
-    height: '100%',
-    borderRadius: 5,
-  },
-
-  // --- Daily Tracker ---
-  dailyTracker: {
-    backgroundColor: '#252525',
-    borderRadius: 12,
-    padding: 12,
-  },
-  trackerRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 2,
-  },
-  trackerLabel: {
-    color: 'white',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  trackerValue: {
-    color: COLORS.secondary,
-    fontSize: 12,
-    fontWeight: 'bold',
-  },
-  
-  // --- Animation Popups (Updated positions) ---
+  // Animation
   popupContainer: { position: 'absolute', top: 10, right: 10, width: 150, alignItems: 'flex-end', zIndex: 99 },
   popupText: { fontSize: 20, fontWeight: '900', textAlign: 'right', textShadowColor: 'black', textShadowRadius: 5 },
 
-  // ... (Keep your existing styles for Tabs, Cards, Inputs, etc. below here) ...
+  // Tabs & General
   tabContainer: { flexDirection: 'row', marginHorizontal: 20, marginBottom: 15, backgroundColor: '#333', borderRadius: 10, padding: 4 },
   tab: { flex: 1, padding: 10, alignItems: 'center', borderRadius: 8 },
   activeTab: { backgroundColor: COLORS.primary },
   tabText: { color: COLORS.textDim, fontWeight: '600', fontSize: 12 },
   activeTabText: { color: 'white' },
   content: { flex: 1, paddingHorizontal: 20 },
+  sectionHeader: { color: COLORS.textDim, fontSize: 14, fontWeight: 'bold', marginBottom: 10, marginTop: 5, textTransform: 'uppercase' },
+
+  // Inputs
   inputRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 15 },
   input: { flex: 1, backgroundColor: COLORS.card, color: 'white', padding: 15, borderRadius: 10 },
   addButton: { backgroundColor: COLORS.secondary, width: 50, height: 50, borderRadius: 10, justifyContent: 'center', alignItems: 'center', marginLeft: 10 },
@@ -796,6 +693,18 @@ const styles = StyleSheet.create({
   dayCircleActive: { backgroundColor: COLORS.primary },
   dayText: { color: COLORS.textDim, fontSize: 12 },
   dayTextActive: { color: 'white', fontWeight: 'bold' },
+
+  // Challenge Type Selector
+  typeSelector: { flexDirection: 'row', marginBottom: 15, justifyContent: 'center' },
+  typeBtn: { paddingVertical: 6, paddingHorizontal: 20, backgroundColor: '#333', marginHorizontal: 5, borderRadius: 20 },
+  typeBtnActive: { backgroundColor: COLORS.blue },
+  typeText: { color: 'white', fontWeight: 'bold', fontSize: 12 },
+
+  // Log Button
+  logButton: { flexDirection: 'row', backgroundColor: '#333', padding: 12, borderRadius: 10, alignItems: 'center', justifyContent: 'center', marginBottom: 15 },
+  logButtonText: { color: 'white', fontWeight: '600', marginLeft: 8 },
+
+  // Cards
   card: { backgroundColor: COLORS.card, borderRadius: 12, padding: 15, marginBottom: 10, flexDirection: 'row', alignItems: 'center' },
   cardFailed: { borderColor: COLORS.danger, borderWidth: 1 },
   checkboxContainer: { marginRight: 15 },
@@ -806,9 +715,24 @@ const styles = StyleSheet.create({
   streakText: { color: COLORS.gold, fontSize: 12, fontWeight: 'bold', marginLeft: 2 },
   metaRow: { flexDirection: 'row', marginTop: 4 },
   metaText: { fontSize: 12, color: COLORS.textDim },
+  
+  // Inventory
+  inventoryContainer: { marginBottom: 20 },
+  inventoryCard: { backgroundColor: '#252525', borderRadius: 12, padding: 15, marginBottom: 10, flexDirection: 'row', alignItems: 'center', borderLeftWidth: 3, borderLeftColor: COLORS.green },
+  redeemButton: { backgroundColor: COLORS.green, paddingHorizontal: 15, paddingVertical: 8, borderRadius: 20 },
+  redeemText: { color: 'white', fontWeight: 'bold', fontSize: 12 },
+  
   buyButton: { backgroundColor: COLORS.primary, paddingHorizontal: 15, paddingVertical: 8, borderRadius: 20 },
-  typeSelector: { flexDirection: 'row', marginBottom: 15, justifyContent: 'center' },
-  typeBtn: { paddingVertical: 6, paddingHorizontal: 20, backgroundColor: '#333', marginHorizontal: 5, borderRadius: 20 },
-  typeBtnActive: { backgroundColor: COLORS.blue },
-  typeText: { color: 'white', fontWeight: 'bold', fontSize: 12 }
+
+  // Modal
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'center', alignItems: 'center' },
+  modalContent: { width: '85%', backgroundColor: COLORS.card, borderRadius: 20, padding: 20 },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 },
+  modalTitle: { fontSize: 20, fontWeight: 'bold', color: 'white' },
+  modalSubtitle: { color: COLORS.textDim, marginBottom: 10 },
+  logItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#333' },
+  logText: { flex: 1, color: 'white', marginLeft: 10 },
+  logPoints: { color: COLORS.secondary, fontWeight: 'bold' },
+  closeModalBtn: { backgroundColor: COLORS.primary, padding: 15, borderRadius: 10, alignItems: 'center', marginTop: 15 },
+  closeModalText: { color: 'white', fontWeight: 'bold' }
 });
