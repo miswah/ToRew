@@ -16,19 +16,19 @@ export const GameProvider = ({ children }) => {
   const [challenges, setChallenges] = useState([]);
   const [rewards, setRewards] = useState([]);
   const [inventory, setInventory] = useState([]);
-  const [popups, setPopups] = useState([]); // Animation queue
+  const [logs, setLogs] = useState([]);
+  const [popups, setPopups] = useState([]);
 
   // --- Persistence ---
   useEffect(() => { loadData(); }, []);
-  useEffect(() => { saveData(); }, [points, tasks, rewards, challenges, inventory]);
+  useEffect(() => { saveData(); }, [points, tasks, rewards, challenges, inventory, logs]); // <--- Added logs dependency
 
-  // --- Game Loop (Expirations) ---
+  // --- Game Loop & App State (Same as before) ---
   useEffect(() => {
     const interval = setInterval(checkExpirations, 10000);
     return () => clearInterval(interval);
   }, [tasks]);
 
-  // --- App State (Resets) ---
   useEffect(() => {
     const subscription = AppState.addEventListener("change", nextAppState => {
       if (nextAppState === "active") checkForResets();
@@ -38,7 +38,7 @@ export const GameProvider = ({ children }) => {
 
   const saveData = async () => {
     try {
-      const data = { points, tasks, rewards, challenges, inventory };
+      const data = { points, tasks, rewards, challenges, inventory, logs };
       await AsyncStorage.setItem(CONSTANTS.STORAGE_KEY, JSON.stringify(data));
     } catch (e) { console.error("Save Error", e); }
   };
@@ -53,12 +53,13 @@ export const GameProvider = ({ children }) => {
         setRewards(data.rewards || []);
         setChallenges(data.challenges || []);
         setInventory(data.inventory || []);
+        setLogs(data.logs || []); // <--- Load logs
         checkForResets(data.tasks, data.challenges);
       }
     } catch (e) { console.error("Load Error", e); }
   };
 
-  // --- Logic Helpers ---
+  // --- Logic Helpers (updatePoints, etc. same as before) ---
   const updatePoints = (amount, bonus = 0) => {
     setPoints(prev => Math.max(0, prev + amount + bonus));
     const id = Date.now().toString() + Math.random();
@@ -67,6 +68,7 @@ export const GameProvider = ({ children }) => {
 
   const removePopup = (id) => setPopups(prev => prev.filter(p => p.id !== id));
 
+  // --- Resets & Expirations (Same as before) ---
   const checkForResets = (currentTasks = tasks, currentChallenges = challenges) => {
     const today = getCurrentDateStr();
     const currentWeek = getWeekNumber(new Date());
@@ -194,11 +196,31 @@ export const GameProvider = ({ children }) => {
         Alert.alert("Success", "Reward redeemed. Enjoy!");
     },
     deleteRewardStoreItem: (id) => setRewards(rewards.filter(r => r.id !== id)),
+    
+    addLog: (entry) => {
+        const today = getCurrentDateStr();
+        // Check if user already logged today to give bonus
+        const alreadyLoggedToday = logs.some(l => l.date === today);
+        
+        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+        setLogs([entry, ...logs]);
+
+        if (!alreadyLoggedToday) {
+            updatePoints(5);
+            Alert.alert("Journal Saved", "You earned +5 XP for your first entry today!");
+        } else {
+            Alert.alert("Journal Saved", "Entry recorded.");
+        }
+    },
+    deleteLog: (id) => {
+        LayoutAnimation.configureNext(LayoutAnimation.Presets.spring);
+        setLogs(logs.filter(l => l.id !== id));
+    },
     removePopup
   };
 
   return (
-    <GameContext.Provider value={{ points, tasks, challenges, rewards, inventory, popups, ...actions }}>
+    <GameContext.Provider value={{ points, tasks, challenges, rewards, inventory, logs, popups, ...actions }}>
       {children}
     </GameContext.Provider>
   );

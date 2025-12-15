@@ -4,6 +4,7 @@ import HeroSection from './src/components/hero/HeroSection';
 import { COLORS } from './src/constants/theme';
 import { GameProvider } from './src/context/GameContext';
 import ChallengesScreen from './src/screens/ChallengesScreen';
+import DailyLogScreen from './src/screens/DailyLogScreen';
 import RewardsScreen from './src/screens/RewardsScreen';
 import TasksScreen from './src/screens/TasksScreen';
 
@@ -14,6 +15,7 @@ function MainLayout() {
     switch (activeTab) {
       case 'tasks': return <TasksScreen />;
       case 'challenges': return <ChallengesScreen />;
+      case 'logs': return <DailyLogScreen />;
       case 'rewards': return <RewardsScreen />;
       default: return <TasksScreen />;
     }
@@ -25,10 +27,16 @@ function MainLayout() {
       
       <HeroSection />
 
-      <View style={styles.tabContainer}>
-        {['tasks', 'challenges', 'rewards'].map(tab => (
-          <TouchableOpacity key={tab} style={[styles.tab, activeTab === tab && styles.activeTab]} onPress={() => setActiveTab(tab)}>
-            <Text style={[styles.tabText, activeTab === tab && styles.activeTabText]}>{tab.toUpperCase()}</Text>
+            <View style={styles.tabContainer}>
+        {['tasks', 'challenges', 'logs', 'rewards'].map(tab => (
+          <TouchableOpacity 
+            key={tab} 
+            style={[styles.tab, activeTab === tab && styles.activeTab]} 
+            onPress={() => setActiveTab(tab)}
+          >
+            <Text style={[styles.tabText, activeTab === tab && styles.activeTabText]}>
+                {tab.toUpperCase()}
+            </Text>
           </TouchableOpacity>
         ))}
       </View>
@@ -53,7 +61,7 @@ const styles = StyleSheet.create({
   tabContainer: { flexDirection: 'row', marginHorizontal: 20, marginBottom: 15, backgroundColor: '#333', borderRadius: 10, padding: 4 },
   tab: { flex: 1, padding: 10, alignItems: 'center', borderRadius: 8 },
   activeTab: { backgroundColor: COLORS.primary },
-  tabText: { color: COLORS.textDim, fontWeight: '600', fontSize: 12 },
+  tabText: { color: COLORS.textDim, fontWeight: '600', fontSize: 10 }, // Slightly smaller font to fit 4 tabs
   activeTabText: { color: 'white' },
   content: { flex: 1, paddingHorizontal: 20 },
 });
